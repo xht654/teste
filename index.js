@@ -2,6 +2,7 @@ import ConfigManager from './src/config/ConfigManager.js';
 import SessionManager from './src/core/SessionManager.js';
 import VPNManager from './src/network/VPNManager.js';
 import WebServer from './src/ui/WebServer.js';
+import HTTPServer from './src/streaming/HTTPServer.js';
 import Logger from './src/utils/Logger.js';
 
 class StreamCaptureApp {
@@ -11,6 +12,7 @@ class StreamCaptureApp {
     this.sessionManager = null;
     this.vpnManager = null;
     this.webServer = null;
+    this.httpServer = null; // ADICIONADO
   }
 
   async initialize() {
@@ -23,12 +25,14 @@ class StreamCaptureApp {
       this.sessionManager = new SessionManager(this.configManager);
       this.vpnManager = new VPNManager(this.configManager);
       this.webServer = new WebServer(this.configManager, this.sessionManager, this.vpnManager);
+      this.httpServer = new HTTPServer(this.sessionManager, this.configManager); // ADICIONADO
 
       // Conectar VPN se habilitada
       await this.vpnManager.connect();
 
-      // Iniciar servidor web
+      // Iniciar servidores
       await this.webServer.start();
+      await this.httpServer.start(); // ADICIONADO
 
       // Iniciar captura automática
       await this.startAutomaticCapture();
@@ -41,7 +45,6 @@ class StreamCaptureApp {
   }
 
   async startAutomaticCapture() {
-    // Iniciar captura paralela de sites habilitados
     try {
       await this.sessionManager.startParallelCapture();
     } catch (error) {
@@ -54,6 +57,7 @@ class StreamCaptureApp {
     
     try {
       await this.sessionManager?.stopAllSessions();
+      await this.httpServer?.stop(); // ADICIONADO
       await this.vpnManager?.disconnect();
       await this.webServer?.stop();
     } catch (error) {
@@ -71,4 +75,3 @@ await app.initialize();
 // Tratamento de sinais
 process.on('SIGTERM', () => app.shutdown());
 process.on('SIGINT', () => app.shutdown());
-

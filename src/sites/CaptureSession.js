@@ -1,4 +1,5 @@
 import EventEmitter from 'events';
+import fs from 'fs';
 import StreamDetector from '../core/StreamDetector.js';
 import StreamlinkManager from '../streaming/StreamlinkManager.js';
 import TVHeadendIntegration from '../streaming/TVHeadendIntegration.js';
@@ -18,6 +19,7 @@ export default class CaptureSession extends EventEmitter {
     this.status = 'idle';
     this.startTime = null;
     this.currentStream = null;
+    this.currentPipePath = null;
     this.restartCount = 0;
     this.isRunning = false;
     this.healthCheckInterval = null;
@@ -47,12 +49,15 @@ export default class CaptureSession extends EventEmitter {
       this.currentStream = this.selectBestStream(streams);
       this.logger.info(`Stream selecionado: ${this.currentStream.type}`);
 
+      // Criar pipe path
+      this.currentPipePath = this.getPipePath();
+
       // Criar canal TVHeadend
       await this.setupTVHeadendChannel();
 
-      // Iniciar streaming
+      // Iniciar streaming (async, não aguardar)
       this.status = 'streaming';
-      await this.startStreaming();
+      this.startStreamingAsync();
 
       // Iniciar monitoramento
       this.startHealthCheck();
@@ -68,6 +73,7 @@ export default class CaptureSession extends EventEmitter {
 
     } catch (error) {
       this.status = 'error';
+      this.isRunning = false;
       this.logger.error('Erro ao iniciar sessão:', error);
       this.emit('error', error);
       throw error;
@@ -87,7 +93,17 @@ export default class CaptureSession extends EventEmitter {
       }
 
       // Parar streaming
-      await this.stopStreaming();
+      this.streamlinkManager.stopAllProcesses();
+
+      // Cleanup pipe
+      if (this.currentPipePath && fs.existsSync(this.currentPipePath)) {
+        try {
+          fs.unlinkSync(this.currentPipePath);
+          this.logger.debug(`Pipe removida: ${this.currentPipePath}`);
+        } catch (error) {
+          this.logger.warn(`Erro ao remover pipe: ${error.message}`);
+        }
+      }
 
       // Cleanup TVHeadend
       await this.tvheadend.removeChannel(this.getChannelName());
@@ -107,7 +123,7 @@ export default class CaptureSession extends EventEmitter {
 
     try {
       await this.stop();
-      await new Promise(resolve => setTimeout(resolve, 3000)); // Aguardar 3s
+      await new Promise(resolve => setTimeout(resolve, 3000));
       await this.start();
       return true;
     } catch (error) {
@@ -117,7 +133,7 @@ export default class CaptureSession extends EventEmitter {
   }
 
   selectBestStream(streams) {
-    // Priorizar streams combinados para melhor compatibilidade
+    // Priorizar streams combinados
     if (streams.combined.length > 0) {
       return {
         type: 'combined',
@@ -156,47 +172,57 @@ export default class CaptureSession extends EventEmitter {
 
   async setupTVHeadendChannel() {
     const channelName = this.getChannelName();
-    const pipePath = this.getPipePath();
     
     // Criar canal pipe
-    await this.tvheadend.createPipeChannel(channelName, pipePath);
+    await this.tvheadend.createPipeChannel(channelName, this.currentPipePath);
     
     // Criar canal HTTP (backup)
-    const httpUrl = `http://stream_capture:8080/${this.site.id}/stream.m3u8`;
+    const httpUrl = `http://stream-capture:8080/${this.site.id}/stream.m3u8`;
     await this.tvheadend.createHttpChannel(`${channelName}_http`, httpUrl);
     
     this.logger.info(`Canais TVHeadend criados: ${channelName}`);
   }
 
-  async startStreaming() {
-    const streamUrl = this.currentStream.type === 'separate' 
-      ? this.currentStream.video 
-      : this.currentStream.url;
+  // Iniciar streaming de forma assíncrona
+  async startStreamingAsync() {
+    try {
+      const streamUrl = this.currentStream.type === 'separate' 
+        ? this.currentStream.video 
+        : this.currentStream.url;
 
-    const options = {
-      quality: this.site.streamlink?.quality || 'best',
-      referer: this.site.referer || this.site.url, // NOVO: Suporte a referer
-      userAgent: this.site.userAgent,
-      retryStreams: this.site.streamlink?.retryStreams || 3,
-      retryMax: this.site.streamlink?.retryMax || 5,
-      customArgs: this.site.streamlink?.customArgs || '',
-      timeout: this.configManager.config.streaming?.timeout || 300
-    };
+      const options = {
+        quality: this.site.streamlink?.quality || 'best',
+        referer: this.site.referer || this.site.url,
+        userAgent: this.site.userAgent,
+        retryStreams: this.site.streamlink?.retryStreams || 3,
+        retryMax: this.site.streamlink?.retryMax || 5,
+        customArgs: this.site.streamlink?.customArgs || '',
+        timeout: 600 // 10 minutos
+      };
 
-    const success = await this.streamlinkManager.streamToOutput(
-      streamUrl,
-      this.getPipePath(),
-      options
-    );
+      this.logger.info('Iniciando Streamlink...');
+      
+      const success = await this.streamlinkManager.streamToOutput(
+        streamUrl,
+        this.currentPipePath,
+        options
+      );
 
-    if (!success) {
-      throw new Error('Falha ao iniciar Streamlink');
+      if (!success && this.isRunning) {
+        this.logger.warn('Streamlink terminou sem sucesso, tentando restart...');
+        setTimeout(() => {
+          if (this.isRunning) {
+            this.restart();
+          }
+        }, 5000);
+      }
+
+    } catch (error) {
+      this.logger.error('Erro no streaming:', error);
+      if (this.isRunning) {
+        setTimeout(() => this.restart(), 5000);
+      }
     }
-  }
-
-  async stopStreaming() {
-    // O Streamlink será parado automaticamente quando a sessão for interrompida
-    // Aqui podemos adicionar limpeza adicional se necessário
   }
 
   startHealthCheck() {
@@ -214,17 +240,16 @@ export default class CaptureSession extends EventEmitter {
       const uptime = Date.now() - this.startTime;
       const maxUptime = this.configManager.config.streaming?.autoRestart?.tokenExpiryCheck || 1800;
 
-      // Verificar se token expirou
+      // Verificar se token expirou (30 minutos)
       if (uptime > maxUptime * 1000) {
-        this.logger.info('Token expirado, reiniciando sessão...');
+        this.logger.info('Token pode ter expirado, reiniciando sessão...');
         await this.restart();
         return;
       }
 
-      // Verificar se pipe ainda existe e está ativo
-      const pipePath = this.getPipePath();
-      if (!await this.tvheadend.isPipeActive(pipePath)) {
-        this.logger.warn('Pipe inativo, reiniciando...');
+      // Verificar se pipe ainda existe
+      if (this.currentPipePath && !fs.existsSync(this.currentPipePath)) {
+        this.logger.warn('Pipe não existe mais, recriando...');
         await this.restart();
       }
 
@@ -243,7 +268,8 @@ export default class CaptureSession extends EventEmitter {
       uptime: this.startTime ? Date.now() - this.startTime : 0,
       restartCount: this.restartCount,
       currentStream: this.currentStream,
-      isRunning: this.isRunning
+      isRunning: this.isRunning,
+      pipePath: this.currentPipePath
     };
   }
 

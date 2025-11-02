@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  tvheadend:
+    image: linuxserver/tvheadend:latest
+    container_name: tvheadend
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Lisbon
+    volumes:
+      - ./tvheadend/config:/config
+      - ./tvheadend/recordings:/recordings
+      - ./tvheadend/timeshift:/timeshift
+    ports:
+      - "9981:9981"
+      - "9982:9982"
+    restart: unless-stopped
+    networks:
+      - streaming_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9981"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  stream-capture:
+    build: .
+    container_name: stream_capture
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DEBUG=false
+      - TZ=Europe/Lisbon
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+    volumes:
+      - ./logs:/app/logs
+      - ./tvheadend/timeshift:/app/timeshift
+      - ./config.json:/app/config.json
+      - ./web:/app/web
+      - ./vpn:/app/vpn:ro
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3000:3000"    # API de configuração (legado)
+      - "3001:3001"    # Web UI principal
+      - "8080:8080"    # Servidor HTTP de streaming
+      - "8081:8081"    # Servidor HTTP secundário (multi-sessão)
+    depends_on:
+      tvheadend:
+        condition: service_healthy
+    networks:
+      - streaming_network
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun
+    privileged: false
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Redis para cache e sessões (opcional)
+  redis:
+    image: redis:7-alpine
+    container_name: stream_cache
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - streaming_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Nginx para load balancing (opcional)
+  nginx:
+    image: nginx:alpine
+    container_name: stream_proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - stream-capture
+    networks:
+      - streaming_network
+    profiles:
+      - production
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  streaming_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+

@@ -1,0 +1,616 @@
+{
+  "metadata": {
+    "version": "2.0.0",
+    "lastUpdated": "2025-01-XX",
+    "description": "Configuração do Sistema Universal de Captura Multi-Sessão"
+  },
+  "sites": {
+    "freeshot_dazn": {
+      "name": "FreeShot DAZN F1",
+      "url": "https://www.freeshot.live/live-tv/dazn-f1-es/241",
+      "enabled": true,
+      "captureMethod": "simple",
+      "waitTime": 10000,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "priority": 1,
+      "referer": "https://www.freeshot.live/",
+      "vpnRequired": false,
+      "streamlink": {
+        "quality": "best",
+        "retryStreams": 5,
+        "retryMax": 10,
+        "customArgs": "--ringbuffer-size 1024M --retry-streams=5.0 --retry-max=12 --retry-open=10 --stream-segment-attempts=20 --stream-segment-threads=10 --stream-segment-timeout=60.0 --stream-timeout=240.0",
+        "useReferer": true
+      },
+      "patterns": {
+        "video": [
+          "tracks-v1",
+          "video",
+          "v1"
+        ],
+        "audio": [
+          "tracks-a1",
+          "audio",
+          "a1"
+        ],
+        "combined": [
+          "index.m3u8",
+          "playlist.m3u8",
+          "master.m3u8"
+        ]
+      },
+      "adProtection": {
+        "level": "off",
+        "customBlockedDomains": [],
+        "allowedDomains": [
+          "planetary.lovecdn.ru",
+          "lovecdn.ru",
+          "freeshot.live"
+        ]
+      },
+      "simpleCapture": {
+        "waitTime": 5000,
+        "patterns": [
+          {
+            "type": "combined",
+            "includes": [
+              ".m3u8",
+              "token="
+            ],
+            "description": "Streams M3U8 com token"
+          },
+          {
+            "type": "video",
+            "includes": [
+              "tracks-v1",
+              ".m3u8"
+            ],
+            "description": "Streams de vídeo"
+          },
+          {
+            "type": "audio",
+            "includes": [
+              "tracks-a1",
+              ".m3u8"
+            ],
+            "description": "Streams de áudio"
+          }
+        ]
+      }
+    },
+    "streameast": {
+      "url": "https://streameast.xyz/",
+      "name": "StreamEast",
+      "captureMethod": "advanced",
+      "referer": "https://streameast.xyz/",
+      "priority": 2,
+      "patterns": {
+        "video": [
+          "video",
+          "v1",
+          "tracks-v",
+          "stream_1",
+          "quality_1"
+        ],
+        "audio": [
+          "audio",
+          "a1",
+          "tracks-a",
+          "stream_2",
+          "quality_2"
+        ],
+        "combined": [
+          "index.m3u8",
+          "playlist.m3u8",
+          "master.m3u8",
+          "stream.m3u8"
+        ]
+      },
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "waitTime": 15000,
+      "enabled": false,
+      "adProtection": {
+        "level": "high",
+        "blockPopups": true,
+        "blockImages": true,
+        "blockFonts": true,
+        "customBlockedDomains": [
+          "ads.streameast.com"
+        ],
+        "allowedDomains": []
+      },
+      "streamlink": {
+        "quality": "720p,best",
+        "retryStreams": 3,
+        "retryMax": 5,
+        "customArgs": "--hls-segment-threads 2 --retry-open 3",
+        "useReferer": true
+      },
+      "session": {
+        "autoRestart": true,
+        "maxRestarts": 3,
+        "restartDelay": 5000
+      }
+    },
+    "sports24": {
+      "url": "https://sports24.stream/",
+      "name": "Sports24",
+      "captureMethod": "advanced",
+      "referer": "https://sports24.stream/",
+      "priority": 3,
+      "patterns": {
+        "video": [
+          "video",
+          "v1",
+          "hd",
+          "quality_high"
+        ],
+        "audio": [
+          "audio",
+          "a1",
+          "sound"
+        ],
+        "combined": [
+          "hls",
+          "m3u8",
+          "live.m3u8"
+        ]
+      },
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "waitTime": 12000,
+      "enabled": false,
+      "adProtection": {
+        "level": "medium",
+        "blockPopups": true,
+        "blockImages": true,
+        "blockFonts": false,
+        "customBlockedDomains": [],
+        "allowedDomains": []
+      },
+      "streamlink": {
+        "quality": "720p,480p,worst",
+        "retryStreams": 3,
+        "retryMax": 5,
+        "customArgs": "--hls-timeout 60",
+        "useReferer": true
+      },
+      "session": {
+        "autoRestart": true,
+        "maxRestarts": 3,
+        "restartDelay": 4000
+      }
+    },
+    "weakspell": {
+      "url": "https://weakspell.org/",
+      "name": "WeakSpell",
+      "captureMethod": "advanced",
+      "referer": "https://weakspell.org/",
+      "priority": 4,
+      "patterns": {
+        "video": [
+          "video",
+          "v1",
+          "stream1",
+          "720p",
+          "1080p"
+        ],
+        "audio": [
+          "audio",
+          "a1",
+          "stream2",
+          "mp3",
+          "aac"
+        ],
+        "combined": [
+          "master.m3u8",
+          "index.m3u8",
+          "live.m3u8"
+        ]
+      },
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "waitTime": 8000,
+      "enabled": false,
+      "adProtection": {
+        "level": "medium",
+        "blockPopups": true,
+        "blockImages": true,
+        "blockFonts": false,
+        "customBlockedDomains": [],
+        "allowedDomains": []
+      },
+      "streamlink": {
+        "quality": "best",
+        "retryStreams": 2,
+        "retryMax": 3,
+        "customArgs": "--hls-live-restart --ringbuffer-size 16M",
+        "useReferer": true
+      },
+      "session": {
+        "autoRestart": false,
+        "maxRestarts": 2,
+        "restartDelay": 6000
+      }
+    },
+    "crackstreams": {
+      "url": "https://crackstreams.com/",
+      "name": "CrackStreams",
+      "captureMethod": "simple",
+      "referer": "https://crackstreams.com/",
+      "priority": 5,
+      "simpleCapture": {
+        "waitTime": 6000,
+        "patterns": [
+          {
+            "type": "combined",
+            "includes": [
+              ".m3u8",
+              "live"
+            ],
+            "description": "Streams M3U8 live"
+          },
+          {
+            "type": "combined",
+            "includes": [
+              "master.m3u8"
+            ],
+            "description": "Master playlists"
+          }
+        ]
+      },
+      "patterns": {
+        "video": [
+          "video",
+          "v1",
+          "tracks-v",
+          "main"
+        ],
+        "audio": [
+          "audio",
+          "a1",
+          "tracks-a",
+          "sound"
+        ],
+        "combined": [
+          "playlist.m3u8",
+          "index.m3u8",
+          "stream.m3u8"
+        ]
+      },
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "waitTime": 10000,
+      "enabled": false,
+      "adProtection": {
+        "level": "high",
+        "blockPopups": true,
+        "blockImages": true,
+        "blockFonts": true,
+        "customBlockedDomains": [],
+        "allowedDomains": []
+      },
+      "streamlink": {
+        "quality": "720p,best",
+        "retryStreams": 5,
+        "retryMax": 8,
+        "customArgs": "--hls-segment-threads 2 --hls-timeout 90 --retry-open 5",
+        "useReferer": true
+      },
+      "session": {
+        "autoRestart": true,
+        "maxRestarts": 4,
+        "restartDelay": 3000
+      }
+    }
+  },
+  "sessions": {
+    "maxParallel": 3,
+    "strategy": "priority",
+    "healthCheckInterval": 300,
+    "globalTimeout": 600,
+    "active": {},
+    "rotation": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "sites": [
+        "freeshot_dazn",
+        "streameast",
+        "sports24"
+      ]
+    }
+  },
+  "vpn": {
+    "enabled": false,
+    "provider": "purevpn",
+    "autoConnect": true,
+    "reconnectOnFailure": true,
+    "config": {
+      "purevpn": {
+        "server": "us1-ovpn.purevpn.net",
+        "port": 1194,
+        "protocol": "udp",
+        "username": "",
+        "password": "",
+        "configFile": "/tmp/purevpn.ovpn"
+      },
+      "openvpn": {
+        "configFile": "/app/vpn/custom.ovpn",
+        "authFile": "/app/vpn/auth.txt",
+        "customConfig": ""
+      }
+    },
+    "healthCheck": {
+      "enabled": true,
+      "interval": 120,
+      "testUrl": "https://api.ipify.org",
+      "expectedResponse": "ip"
+    }
+  },
+  "adProtection": {
+    "levels": {
+      "off": {
+        "blockPopups": false,
+        "blockImages": false,
+        "blockFonts": false,
+        "blockDomains": []
+      },
+      "low": {
+        "blockPopups": true,
+        "blockImages": false,
+        "blockFonts": false,
+        "blockDomains": [
+          "googlesyndication.com",
+          "doubleclick.net",
+          "popads.net",
+          "popcash.net"
+        ]
+      },
+      "medium": {
+        "blockPopups": true,
+        "blockImages": true,
+        "blockFonts": false,
+        "blockDomains": [
+          "googlesyndication.com",
+          "doubleclick.net",
+          "googletagmanager.com",
+          "popads.net",
+          "popcash.net",
+          "propellerads.com",
+          "revcontent.com",
+          "outbrain.com",
+          "taboola.com",
+          "mgid.com"
+        ]
+      },
+      "high": {
+        "blockPopups": true,
+        "blockImages": true,
+        "blockFonts": true,
+        "blockDomains": [
+          "googlesyndication.com",
+          "doubleclick.net",
+          "googletagmanager.com",
+          "facebook.com",
+          "fbcdn.net",
+          "amazon-adsystem.com",
+          "adsystem.com",
+          "popads.net",
+          "popcash.net",
+          "propellerads.com",
+          "revcontent.com",
+          "outbrain.com",
+          "taboola.com",
+          "mgid.com",
+          "buzzcity.net",
+          "adskeeper.co.uk",
+          "adnxs.com",
+          "adsafe.org",
+          "adsafeprotected.com",
+          "scorecardresearch.com",
+          "quantserve.com",
+          "google-analytics.com",
+          "googleadservices.com",
+          "googletag",
+          "yandex.ru",
+          "metrica",
+          "hotjar.com",
+          "mouseflow.com"
+        ]
+      }
+    }
+  },
+  "streaming": {
+    "preferredTool": "streamlink",
+    "fallbackTools": [
+      "vlc",
+      "ffmpeg"
+    ],
+    "timeout": 300,
+    "retryAttempts": 3,
+    "cycleInterval": 600,
+    "enableCombining": true,
+    "maxConcurrentStreams": 3,
+    "httpServer": {
+      "enabled": true,
+      "port": 8080,
+      "cors": true,
+      "compression": true
+    },
+    "autoRestart": {
+      "enabled": true,
+      "tokenExpiryCheck": 1800,
+      "healthCheckInterval": 300,
+      "maxRestarts": 5,
+      "exponentialBackoff": true
+    },
+    "quality": {
+      "priorities": [
+        "1080p",
+        "720p",
+        "480p",
+        "360p",
+        "worst"
+      ],
+      "fallbackToWorst": true,
+      "adaptiveQuality": false
+    }
+  },
+  "detection": {
+    "commonFormats": [
+      ".m3u8",
+      ".ts",
+      ".mp4",
+      ".mkv",
+      ".webm",
+      ".flv",
+      ".mpd"
+    ],
+    "tokenPatterns": [
+      "token=",
+      "auth=",
+      "key=",
+      "signature=",
+      "jwt=",
+      "bearer=",
+      "session=",
+      "access_token="
+    ],
+    "skipPatterns": [
+      "favicon",
+      "css",
+      "js",
+      "png",
+      "jpg",
+      "gif",
+      "svg",
+      "woff",
+      "ttf",
+      "analytics",
+      "ads",
+      "tracker"
+    ],
+    "maxWaitTime": 45000,
+    "retryOnFailure": true,
+    "universalPatterns": {
+      "video": [
+        "video",
+        "v1",
+        "v2",
+        "track-v",
+        "tracks-v",
+        "stream_1",
+        "quality_1",
+        "hd",
+        "720p",
+        "1080p",
+        "main",
+        "high",
+        "source"
+      ],
+      "audio": [
+        "audio",
+        "a1",
+        "a2",
+        "track-a",
+        "tracks-a",
+        "stream_2",
+        "quality_2",
+        "sound",
+        "mp3",
+        "aac",
+        "audio_only"
+      ],
+      "combined": [
+        "index.m3u8",
+        "playlist.m3u8",
+        "master.m3u8",
+        "stream.m3u8",
+        "live.m3u8",
+        "hls.m3u8",
+        "manifest.m3u8",
+        "chunklist.m3u8"
+      ]
+    }
+  },
+  "tvheadend": {
+    "host": "tvheadend",
+    "port": 9982,
+    "username": "",
+    "password": "",
+    "channels": {
+      "prefix": "stream_",
+      "groupTitle": "Live Streams",
+      "createBackupHttp": true,
+      "cleanupOldChannels": true
+    },
+    "integration": {
+      "enabled": true,
+      "autoCreateChannels": true,
+      "updateEPG": false,
+      "recordingEnabled": false
+    }
+  },
+  "security": {
+    "encryptPasswords": true,
+    "saltRounds": 12,
+    "sessionTimeout": 3600,
+    "apiKeyRequired": false,
+    "allowedOrigins": [
+      "*"
+    ],
+    "rateLimiting": {
+      "enabled": true,
+      "maxRequests": 100,
+      "windowMs": 900000
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "console": true,
+    "file": true,
+    "maxFileSize": "10MB",
+    "maxFiles": 7,
+    "format": "combined",
+    "modules": {
+      "SessionManager": "INFO",
+      "VPNManager": "INFO",
+      "StreamDetector": "DEBUG",
+      "HTTPServer": "WARN"
+    }
+  },
+  "performance": {
+    "maxMemoryUsage": "512MB",
+    "gcInterval": 300000,
+    "browserInstances": {
+      "max": 3,
+      "reuseInstances": true,
+      "timeout": 300000
+    },
+    "caching": {
+      "enabled": true,
+      "streamUrls": 300,
+      "siteConfigs": 1800
+    }
+  },
+  "notifications": {
+    "enabled": false,
+    "webhook": {
+      "url": "",
+      "events": [
+        "stream_found",
+        "stream_failed",
+        "vpn_connected",
+        "vpn_failed"
+      ]
+    },
+    "email": {
+      "smtp": {
+        "host": "",
+        "port": 587,
+        "secure": false,
+        "user": "",
+        "password": ""
+      },
+      "from": "",
+      "to": []
+    }
+  }
+}

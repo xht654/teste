@@ -8,20 +8,16 @@ export default class StreamlinkManager {
     this.activeProcesses = new Map();
   }
 
-  // Criar named pipe antes de executar Streamlink
+  // Criar named pipe
   async createPipe(pipePath) {
     try {
-      // Remover pipe existente
       if (fs.existsSync(pipePath)) {
         fs.unlinkSync(pipePath);
         this.logger.debug(`Pipe antiga removida: ${pipePath}`);
       }
 
-      // Criar nova pipe usando mkfifo
       const { execSync } = await import('child_process');
       execSync(`mkfifo "${pipePath}"`);
-      
-      // Dar permissões adequadas
       fs.chmodSync(pipePath, 0o666);
       
       this.logger.info(`✅ Named pipe criada: ${pipePath}`);
@@ -32,7 +28,7 @@ export default class StreamlinkManager {
     }
   }
 
-  // Executar Streamlink com referer e configurações avançadas
+  // NOVA ABORDAGEM: Streamlink -> FFmpeg -> Pipe
   async streamToOutput(streamUrl, outputPath, options = {}) {
     const {
       quality = 'best',
@@ -41,139 +37,181 @@ export default class StreamlinkManager {
       retryStreams = 3,
       retryMax = 5,
       customArgs = '',
-      timeout = 600 // AUMENTADO para 10 minutos
+      timeout = 600
     } = options;
 
     try {
       // Criar pipe primeiro
       await this.createPipe(outputPath);
 
-      const args = [
+      // Argumentos Streamlink (output para stdout)
+      const streamlinkArgs = [
         '--loglevel', 'info',
-        '--output', outputPath,
-        '--force',
+        '--stdout', // CRÍTICO: output para stdout ao invés de arquivo
         '--retry-streams', retryStreams.toString(),
         '--retry-max', retryMax.toString(),
-        '--stream-segment-timeout', '60.0', // ADICIONADO: timeout por segmento
-        '--hls-live-restart', // ADICIONADO: restart automático
-        '--hls-segment-stream-data' // ADICIONADO: melhor handling de dados
+        '--stream-segment-timeout', '60.0'
       ];
 
-      // Adicionar referer se especificado
       if (referer) {
-        args.push('--http-header', `Referer=${referer}`);
+        streamlinkArgs.push('--http-header', `Referer=${referer}`);
         this.logger.info(`Usando referer: ${referer}`);
       }
 
-      // Adicionar User-Agent se especificado
       if (userAgent) {
-        args.push('--http-header', `User-Agent=${userAgent}`);
+        streamlinkArgs.push('--http-header', `User-Agent=${userAgent}`);
       }
 
-      // Adicionar argumentos personalizados
       if (customArgs && customArgs.trim()) {
         const customArgArray = customArgs.trim().split(/\s+/);
-        args.push(...customArgArray);
+        streamlinkArgs.push(...customArgArray);
         this.logger.info(`Argumentos personalizados: ${customArgs}`);
       }
 
-      // Adicionar URL e qualidade
-      args.push(streamUrl, quality);
+      streamlinkArgs.push(streamUrl, quality);
 
-      const command = `streamlink ${args.join(' ')}`;
-      this.logger.info(`Comando Streamlink: ${command}`);
+      const streamlinkCmd = `streamlink ${streamlinkArgs.join(' ')}`;
+      this.logger.info(`Comando Streamlink: ${streamlinkCmd}`);
+
+      // FFmpeg args (ler de stdin, escrever na pipe)
+      const ffmpegArgs = [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-i', 'pipe:0', // Ler de stdin
+        '-c', 'copy', // Copy sem transcodificar
+        '-f', 'mpegts', // Formato MPEG-TS
+        '-y', // Overwrite
+        outputPath
+      ];
+
+      this.logger.info(`FFmpeg irá escrever para: ${outputPath}`);
 
       return new Promise((resolve, reject) => {
-        const streamProcess = spawn('streamlink', args, {
+        // Iniciar Streamlink
+        const streamlinkProcess = spawn('streamlink', streamlinkArgs, {
           stdio: ['ignore', 'pipe', 'pipe']
         });
-        
+
+        // Iniciar FFmpeg
+        const ffmpegProcess = spawn('ffmpeg', ffmpegArgs, {
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+
         const processId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        this.activeProcesses.set(processId, streamProcess);
+        this.activeProcesses.set(processId, { streamlink: streamlinkProcess, ffmpeg: ffmpegProcess });
 
         let isStable = false;
         let hasError = false;
         const startTime = Date.now();
-        let outputReceived = false;
 
-        streamProcess.stdout.on('data', (data) => {
-          const output = data.toString().trim();
-          if (output && !output.includes('segment')) {
-            this.logger.debug(`STREAMLINK: ${output}`);
-            if (output.includes('Writing output') || output.includes('Opening output')) {
-              isStable = true;
-              outputReceived = true;
-            }
+        // Pipe Streamlink stdout -> FFmpeg stdin
+        streamlinkProcess.stdout.pipe(ffmpegProcess.stdin);
+
+        // Logs Streamlink
+        streamlinkProcess.stdout.on('data', () => {
+          if (!isStable) {
+            this.logger.info('✅ Streamlink começou a enviar dados');
+            isStable = true;
           }
         });
 
-        streamProcess.stderr.on('data', (data) => {
+        streamlinkProcess.stderr.on('data', (data) => {
           const output = data.toString();
           
-          // Log apenas mensagens importantes
           if (output.includes('[cli][info]')) {
-            this.logger.info(`STREAMLINK INFO: ${output.trim()}`);
-            if (output.includes('Opening output') || output.includes('Stream')) {
+            const cleanOutput = output.replace('[cli][info]', '').trim();
+            if (cleanOutput && !cleanOutput.includes('segment')) {
+              this.logger.debug(`STREAMLINK: ${cleanOutput}`);
+            }
+            if (output.includes('Opening stream') || output.includes('Stream')) {
               isStable = true;
-              outputReceived = true;
             }
           }
           
-          // Detectar erros críticos
-          if (output.includes('error: ') || output.includes('Failed to')) {
+          if (output.includes('error:') || output.includes('Failed to')) {
             this.logger.error(`STREAMLINK ERROR: ${output.trim()}`);
             hasError = true;
           }
         });
 
-        streamProcess.on('close', (code) => {
-          const duration = Math.round((Date.now() - startTime) / 1000);
-          this.activeProcesses.delete(processId);
+        // Logs FFmpeg
+        let ffmpegStarted = false;
+        ffmpegProcess.stderr.on('data', (data) => {
+          const output = data.toString();
           
-          this.logger.info(`Streamlink terminou com código ${code} após ${duration}s`);
+          if (!ffmpegStarted && (output.includes('Output') || output.includes('Stream'))) {
+            this.logger.info('✅ FFmpeg começou a escrever na pipe');
+            ffmpegStarted = true;
+          }
           
-          // Código 0 = sucesso, Código 130 = SIGTERM (esperado no timeout)
-          if (code === 0 || (isStable && code === 130)) {
-            resolve(true);
-          } else if (hasError || code === 1) {
-            resolve(false);
-          } else {
-            // Outros códigos mas teve output
-            resolve(outputReceived);
+          // Log apenas erros do FFmpeg
+          if (output.includes('error') || output.includes('failed')) {
+            this.logger.warn(`FFMPEG: ${output.trim()}`);
           }
         });
 
-        streamProcess.on('error', (error) => {
-          this.logger.error('Erro no processo Streamlink:', error);
+        // Handle process exits
+        streamlinkProcess.on('close', (code) => {
+          const duration = Math.round((Date.now() - startTime) / 1000);
+          this.logger.info(`Streamlink terminou com código ${code} após ${duration}s`);
+          
+          // Fechar stdin do FFmpeg quando Streamlink terminar
+          try {
+            ffmpegProcess.stdin.end();
+          } catch (e) {}
+        });
+
+        ffmpegProcess.on('close', (code) => {
+          const duration = Math.round((Date.now() - startTime) / 1000);
+          this.logger.info(`FFmpeg terminou com código ${code} após ${duration}s`);
+          
+          this.activeProcesses.delete(processId);
+          
+          if (code === 0 || (isStable && code !== 1)) {
+            resolve(true);
+          } else if (hasError) {
+            resolve(false);
+          } else {
+            resolve(isStable);
+          }
+        });
+
+        // Error handling
+        streamlinkProcess.on('error', (error) => {
+          this.logger.error('Erro no Streamlink:', error);
+          ffmpegProcess.kill('SIGTERM');
           this.activeProcesses.delete(processId);
           reject(error);
         });
 
-        // Timeout com cleanup
+        ffmpegProcess.on('error', (error) => {
+          this.logger.error('Erro no FFmpeg:', error);
+          streamlinkProcess.kill('SIGTERM');
+          this.activeProcesses.delete(processId);
+          reject(error);
+        });
+
+        // Timeout
         const timeoutHandle = setTimeout(() => {
-          if (streamProcess && !streamProcess.killed) {
-            this.logger.warn(`Streamlink timeout após ${timeout}s`);
+          if (!streamlinkProcess.killed || !ffmpegProcess.killed) {
+            this.logger.warn(`Timeout após ${timeout}s`);
             
-            // Tentar terminar gracefully primeiro
-            streamProcess.kill('SIGTERM');
+            streamlinkProcess.kill('SIGTERM');
+            ffmpegProcess.kill('SIGTERM');
             
-            // Force kill após 5s se necessário
             setTimeout(() => {
-              if (!streamProcess.killed) {
-                streamProcess.kill('SIGKILL');
-              }
+              if (!streamlinkProcess.killed) streamlinkProcess.kill('SIGKILL');
+              if (!ffmpegProcess.killed) ffmpegProcess.kill('SIGKILL');
             }, 5000);
           }
         }, timeout * 1000);
 
-        // Limpar timeout se processo terminar antes
-        streamProcess.on('close', () => {
-          clearTimeout(timeoutHandle);
-        });
+        streamlinkProcess.on('close', () => clearTimeout(timeoutHandle));
+        ffmpegProcess.on('close', () => clearTimeout(timeoutHandle));
       });
 
     } catch (error) {
-      this.logger.error('Erro ao iniciar Streamlink:', error);
+      this.logger.error('Erro ao iniciar streaming:', error);
       throw error;
     }
   }
@@ -213,9 +251,14 @@ export default class StreamlinkManager {
 
   // Parar processo específico
   stopProcess(processId) {
-    const process = this.activeProcesses.get(processId);
-    if (process && !process.killed) {
-      process.kill('SIGTERM');
+    const processes = this.activeProcesses.get(processId);
+    if (processes) {
+      if (processes.streamlink && !processes.streamlink.killed) {
+        processes.streamlink.kill('SIGTERM');
+      }
+      if (processes.ffmpeg && !processes.ffmpeg.killed) {
+        processes.ffmpeg.kill('SIGTERM');
+      }
       this.activeProcesses.delete(processId);
       return true;
     }
@@ -224,10 +267,13 @@ export default class StreamlinkManager {
 
   // Parar todos os processos
   stopAllProcesses() {
-    this.logger.info('Parando todos os processos Streamlink...');
-    for (const [id, process] of this.activeProcesses) {
-      if (!process.killed) {
-        process.kill('SIGTERM');
+    this.logger.info('Parando todos os processos...');
+    for (const [id, processes] of this.activeProcesses) {
+      if (processes.streamlink && !processes.streamlink.killed) {
+        processes.streamlink.kill('SIGTERM');
+      }
+      if (processes.ffmpeg && !processes.ffmpeg.killed) {
+        processes.ffmpeg.kill('SIGTERM');
       }
     }
     this.activeProcesses.clear();

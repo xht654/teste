@@ -88,13 +88,25 @@ export default class StreamlinkManager {
 
       return new Promise((resolve, reject) => {
         // Iniciar Streamlink
+        this.logger.debug('Spawning Streamlink process...');
         const streamlinkProcess = spawn('streamlink', streamlinkArgs, {
           stdio: ['ignore', 'pipe', 'pipe']
         });
 
+        // Verificar se Streamlink iniciou
+        streamlinkProcess.on('spawn', () => {
+          this.logger.info('✅ Processo Streamlink iniciado (PID: ' + streamlinkProcess.pid + ')');
+        });
+
         // Iniciar FFmpeg
+        this.logger.debug('Spawning FFmpeg process...');
         const ffmpegProcess = spawn('ffmpeg', ffmpegArgs, {
           stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        // Verificar se FFmpeg iniciou
+        ffmpegProcess.on('spawn', () => {
+          this.logger.info('✅ Processo FFmpeg iniciado (PID: ' + ffmpegProcess.pid + ')');
         });
 
         const processId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -105,12 +117,13 @@ export default class StreamlinkManager {
         const startTime = Date.now();
 
         // Pipe Streamlink stdout -> FFmpeg stdin
+        this.logger.info('🔗 Conectando Streamlink stdout -> FFmpeg stdin');
         streamlinkProcess.stdout.pipe(ffmpegProcess.stdin);
 
         // Logs Streamlink
-        streamlinkProcess.stdout.on('data', () => {
+        streamlinkProcess.stdout.on('data', (chunk) => {
           if (!isStable) {
-            this.logger.info('✅ Streamlink começou a enviar dados');
+            this.logger.info(`✅ Streamlink começou a enviar dados (${chunk.length} bytes)`);
             isStable = true;
           }
         });
@@ -118,10 +131,15 @@ export default class StreamlinkManager {
         streamlinkProcess.stderr.on('data', (data) => {
           const output = data.toString();
           
+          // Log TODAS as mensagens para debug
+          if (output.trim()) {
+            this.logger.debug(`STREAMLINK STDERR: ${output.trim()}`);
+          }
+          
           if (output.includes('[cli][info]')) {
             const cleanOutput = output.replace('[cli][info]', '').trim();
             if (cleanOutput && !cleanOutput.includes('segment')) {
-              this.logger.debug(`STREAMLINK: ${cleanOutput}`);
+              this.logger.info(`STREAMLINK: ${cleanOutput}`);
             }
             if (output.includes('Opening stream') || output.includes('Stream')) {
               isStable = true;
@@ -139,15 +157,25 @@ export default class StreamlinkManager {
         ffmpegProcess.stderr.on('data', (data) => {
           const output = data.toString();
           
-          if (!ffmpegStarted && (output.includes('Output') || output.includes('Stream'))) {
+          // Log TUDO do FFmpeg para debug
+          if (output.trim()) {
+            this.logger.debug(`FFMPEG STDERR: ${output.trim()}`);
+          }
+          
+          if (!ffmpegStarted && (output.includes('Output') || output.includes('Stream') || output.includes('muxing'))) {
             this.logger.info('✅ FFmpeg começou a escrever na pipe');
             ffmpegStarted = true;
           }
           
-          // Log apenas erros do FFmpeg
-          if (output.includes('error') || output.includes('failed')) {
-            this.logger.warn(`FFMPEG: ${output.trim()}`);
+          // Log erros do FFmpeg
+          if (output.toLowerCase().includes('error') || output.toLowerCase().includes('failed')) {
+            this.logger.error(`FFMPEG ERROR: ${output.trim()}`);
           }
+        });
+
+        // Log quando FFmpeg stdin recebe dados
+        ffmpegProcess.stdin.on('pipe', () => {
+          this.logger.info('✅ FFmpeg stdin conectado ao Streamlink stdout');
         });
 
         // Handle process exits
@@ -178,14 +206,16 @@ export default class StreamlinkManager {
 
         // Error handling
         streamlinkProcess.on('error', (error) => {
-          this.logger.error('Erro no Streamlink:', error);
+          this.logger.error('❌ Erro ao iniciar Streamlink:', error);
+          this.logger.error('Verifique se streamlink está instalado: pip3 list | grep streamlink');
           ffmpegProcess.kill('SIGTERM');
           this.activeProcesses.delete(processId);
           reject(error);
         });
 
         ffmpegProcess.on('error', (error) => {
-          this.logger.error('Erro no FFmpeg:', error);
+          this.logger.error('❌ Erro ao iniciar FFmpeg:', error);
+          this.logger.error('Verifique se ffmpeg está instalado: ffmpeg -version');
           streamlinkProcess.kill('SIGTERM');
           this.activeProcesses.delete(processId);
           reject(error);

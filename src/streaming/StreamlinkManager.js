@@ -50,7 +50,9 @@ export default class StreamlinkManager {
         '--stdout', // CRÍTICO: output para stdout ao invés de arquivo
         '--retry-streams', retryStreams.toString(),
         '--retry-max', retryMax.toString(),
-        '--stream-segment-timeout', '60.0'
+        '--stream-segment-timeout', '60.0',
+        '--hls-live-restart', // Restart automático se stream parar
+        '--hls-segment-stream-data' // Forçar streaming direto de dados
       ];
 
       if (referer) {
@@ -69,6 +71,13 @@ export default class StreamlinkManager {
       }
 
       streamlinkArgs.push(streamUrl, quality);
+
+      // IMPORTANTE: Adicionar flag para desabilitar muxing
+      const streamlinkArgsWithWorkaround = [
+        ...streamlinkArgs.slice(0, -1), // Tudo exceto quality
+        '--stream-types', 'hls', // Forçar HLS simples, não hls-multi
+        quality
+      ];
 
       const streamlinkCmd = `streamlink ${streamlinkArgs.join(' ')}`;
       this.logger.info(`Comando Streamlink: ${streamlinkCmd}`);

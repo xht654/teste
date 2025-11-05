@@ -22,8 +22,12 @@ export default class Logger {
     console.log(logMessage);
     
     // File output
-    const logFile = path.join(this.logDir, `capture_${new Date().toISOString().split('T')[0]}.log`);
-    fs.appendFileSync(logFile, logMessage + '\n');
+    try {
+      const logFile = path.join(this.logDir, `capture_${new Date().toISOString().split('T')[0]}.log`);
+      fs.appendFileSync(logFile, logMessage + '\n');
+    } catch (error) {
+      // Silently fail if can't write to file
+    }
   }
 
   info(message) {
@@ -46,8 +50,12 @@ export default class Logger {
   }
 
   debug(message) {
-    if (process.env.DEBUG === 'true') {
-      this.log(message, 'DEBUG');
-    }
+    // TEMPORÁRIO: sempre mostrar debug para diagnosticar problema
+    this.log(message, 'DEBUG');
+    
+    // Após resolver, usar:
+    // if (process.env.DEBUG === 'true' || process.env.NODE_ENV === 'development') {
+    //   this.log(message, 'DEBUG');
+    // }
   }
 }

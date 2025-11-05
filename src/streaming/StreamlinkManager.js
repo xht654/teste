@@ -36,8 +36,8 @@ export default class StreamlinkManager {
         '--retry-streams', retryStreams.toString(),
         '--retry-max', retryMax.toString(),
         '--stream-segment-timeout', '60.0',
-        '--hls-live-restart',
-        '--stream-types', 'hls' // Forçar HLS simples
+        //'--hls-live-restart',
+        //'--stream-types', 'hls' // Forçar HLS simples
       ];
 
       if (referer) {

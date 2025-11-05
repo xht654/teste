@@ -21,6 +21,11 @@ class StreamCaptureApp {
       await this.configManager.loadConfig();
       this.logger.info('Configuração carregada');
 
+      // Log level para debug
+      if (process.env.DEBUG === 'true' || process.env.NODE_ENV === 'development') {
+        this.logger.info('🐛 Modo DEBUG ativado');
+      }
+
       // Inicializar módulos
       this.sessionManager = new SessionManager(this.configManager);
       this.vpnManager = new VPNManager(this.configManager);

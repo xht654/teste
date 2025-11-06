@@ -73,3 +73,33 @@ TVHEADEND_PASS=admin
   }
 }
 
+
+ Resumo das Mudanças
+✅ O que mudou:
+
+StreamlinkManager escreve em arquivo .ts diretamente
+HTTPServer serve arquivos .ts via rota /files/:filename
+Multi-sessão funcionando:
+
+/files - lista todos os arquivos
+/:siteId/stream.m3u8 - M3U8 playlist para site específico
+/files/stream_SITE_timestamp.ts - arquivo direto
+/streams - lista todos os streams ativos com URLs
+
+
+
+🎯 Como usar (multi-sessão):
+bash# Ver todos os streams disponíveis
+curl http://localhost:8080/streams
+
+# Ver arquivos .ts
+curl http://localhost:8080/files
+
+# Assistir site específico via M3U8
+vlc http://localhost:8080/freeshot_dazn/stream.m3u8
+
+# Ou diretamente o arquivo .ts
+vlc http://localhost:8080/files/stream_freeshot_dazn_2025-11-05T16-19-31-607Z.ts
+
+# TVHeadend config
+# URL: http://stream-capture:8080/freeshot_dazn/stream.m3u8

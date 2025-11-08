@@ -141,3 +141,179 @@ http://stream-capture:${this.port}/${siteId}/stream
     // ROTA: Status de um stream específico
     this.app.get('/:siteId/status', (req, res) => {
       const {
+        siteId } = req.params;
+        const session = this.sessionManager.activeSessions.get(siteId);
+  
+  if (!session) {
+    res.status(404).json({ error: 'Sessão não encontrada' });
+    return;
+  }
+  
+  const pipeReader = session.pipeReader;
+  
+  res.json({
+    siteId,
+    siteName: session.site.name,
+    isRunning: session.isRunning,
+    status: session.status,
+    uptime: session.startTime ? Date.now() - session.startTime : 0,
+    restartCount: session.restartCount,
+    pipePath: session.currentPipePath,
+    pipeReader: pipeReader ? pipeReader.getStats() : null,
+    streamUrl: `http://stream-capture:${this.port}/${siteId}/stream`,
+    m3u8Url: `http://stream-capture:${this.port}/${siteId}/stream.m3u8`
+  });
+});
+
+// ROTA: Status global do servidor
+this.app.get('/status', (req, res) => {
+  const sessions = this.sessionManager.getSessionsStatus();
+  const activeSessions = Object.values(sessions).filter(s => s.isRunning);
+  
+  const streamDetails = {};
+  for (const [siteId, session] of this.sessionManager.activeSessions) {
+    if (session.isRunning && session.pipeReader) {
+      streamDetails[siteId] = {
+        name: session.site.name,
+        url: `http://stream-capture:${this.port}/${siteId}/stream`,
+        m3u8: `http://stream-capture:${this.port}/${siteId}/stream.m3u8`,
+        clients: session.pipeReader.clients.size,
+        stats: session.pipeReader.getStats()
+      };
+    }
+  }
+  
+  res.json({
+    server: 'HTTP Stream Server',
+    version: '2.0',
+    port: this.port,
+    totalSessions: Object.keys(sessions).length,
+    activeSessions: activeSessions.length,
+    streams: streamDetails,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ROTA: Lista todos os streams disponíveis
+this.app.get('/streams', (req, res) => {
+  const sessions = this.sessionManager.getSessionsStatus();
+  const streams = {};
+  
+  for (const [siteId, session] of Object.entries(sessions)) {
+    if (session.isRunning) {
+      streams[siteId] = {
+        name: session.siteName,
+        url: `http://stream-capture:${this.port}/${siteId}/stream`,
+        m3u8: `http://stream-capture:${this.port}/${siteId}/stream.m3u8`,
+        status: session.status,
+        uptime: session.uptime,
+        clients: 0
+      };
+      
+      // Adicionar contagem de clientes se PipeReader existe
+      const activeSession = this.sessionManager.activeSessions.get(siteId);
+      if (activeSession && activeSession.pipeReader) {
+        streams[siteId].clients = activeSession.pipeReader.clients.size;
+      }
+    }
+  }
+  
+  res.json(streams);
+});
+
+// ROTA: Informações detalhadas de um stream
+this.app.get('/:siteId/info', (req, res) => {
+  const { siteId } = req.params;
+  
+  const session = this.sessionManager.activeSessions.get(siteId);
+  
+  if (!session) {
+    res.status(404).json({ error: 'Sessão não encontrada' });
+    return;
+  }
+  
+  const info = {
+    siteId,
+    siteName: session.site.name,
+    siteUrl: session.site.url,
+    status: session.status,
+    isRunning: session.isRunning,
+    uptime: session.startTime ? Date.now() - session.startTime : 0,
+    startTime: session.startTime,
+    restartCount: session.restartCount,
+    pipePath: session.currentPipePath,
+    streamUrls: {
+      direct: `http://stream-capture:${this.port}/${siteId}/stream`,
+      m3u8: `http://stream-capture:${this.port}/${siteId}/stream.m3u8`,
+      status: `http://stream-capture:${this.port}/${siteId}/status`
+    },
+    currentStream: session.currentStream,
+    pipeReader: null
+  };
+  
+  if (session.pipeReader) {
+    info.pipeReader = session.pipeReader.getStats();
+  }
+  
+  res.json(info);
+});
+
+// ROTA: Health check
+this.app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ROTA: Root (informações do servidor)
+this.app.get('/', (req, res) => {
+  res.json({
+    server: 'Stream Capture HTTP Server',
+    version: '2.0',
+    description: 'Pipe → HTTP Streaming Server',
+    port: this.port,
+    endpoints: {
+      stream: '/:siteId/stream (HTTP chunks)',
+      m3u8: '/:siteId/stream.m3u8 (M3U8 playlist)',
+      status: '/status (server status)',
+      streams: '/streams (list all streams)',
+      info: '/:siteId/info (stream details)',
+      health: '/health (health check)'
+    },
+    usage: {
+      vlc: `vlc http://stream-capture:${this.port}/<site_id>/stream`,
+      tvheadend: `http://stream-capture:${this.port}/<site_id>/stream.m3u8`,
+      browser: `http://localhost:${this.port}/<site_id>/stream`
+    }
+  });
+});
+
+// 404 handler
+this.app.use((req, res) => {
+  res.status(404).json({
+    error: 'Not Found',
+    message: 'Endpoint não encontrado',
+    availableEndpoints: [
+      '/:siteId/stream',
+      '/:siteId/stream.m3u8',
+      '/:siteId/status',
+      '/status',
+      '/streams',
+      '/health'
+    ]
+  });
+});
+
+// Error handler
+this.app.use((err, req, res, next) => {
+  this.logger.error(`❌ Erro no servidor HTTP: ${err.message}`);
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: err.message
+  });
+});
+}
+}
+
+      

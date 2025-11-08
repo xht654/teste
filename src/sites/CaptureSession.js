@@ -1,3 +1,4 @@
+
 import EventEmitter from 'events';
 import fs from 'fs';
 import StreamDetector from '../core/StreamDetector.js';

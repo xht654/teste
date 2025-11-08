@@ -62,9 +62,9 @@ export default class StreamlinkManager {
         '--retry-streams', retryStreams.toString(),
         '--retry-max', retryMax.toString(),
         '--stream-segment-timeout', '60.0',
-        '--hls-live-restart',
-        '--ringbuffer-size', '512K', // Buffer pequeno para baixa latência
-        '--stream-types', 'hls'
+        //'--hls-live-restart',
+        //'--ringbuffer-size', '512K', // Buffer pequeno para baixa latência
+        //'--stream-types', 'hls'
       ];
 
       if (referer) {

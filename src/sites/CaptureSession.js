@@ -20,6 +20,8 @@ export default class CaptureSession extends EventEmitter {
     this.startTime = null;
     this.currentStream = null;
     this.currentPipePath = null;
+    this.currentProcessId = null;
+    this.pipeReader = null; // ← NOVO: Referência ao PipeReader
     this.restartCount = 0;
     this.isRunning = false;
     this.healthCheckInterval = null;
@@ -34,92 +36,111 @@ export default class CaptureSession extends EventEmitter {
     this.status = 'starting';
     this.startTime = Date.now();
     
-    this.logger.info(`Iniciando sessão para ${this.site.name}`);
+    this.logger.info(`🚀 Iniciando sessão para ${this.site.name}`);
     
     try {
-      // Detectar streams
+      // 1. DETECTAR STREAMS
       this.status = 'detecting';
+      this.logger.info('🔍 Detectando streams...');
+      
       const streams = await this.streamDetector.detectStreams();
       
       if (!streams || (!streams.video && !streams.audio && streams.combined.length === 0)) {
-        throw new Error('Nenhum stream detectado');
+        throw new Error('❌ Nenhum stream detectado');
       }
 
-      // Selecionar melhor stream
+      this.logger.info(`✅ Streams detectados: V:${!!streams.video} A:${!!streams.audio} C:${streams.combined.length}`);
+
+      // 2. SELECIONAR MELHOR STREAM
       this.currentStream = this.selectBestStream(streams);
-      this.logger.info(`Stream selecionado: ${this.currentStream.type}`);
+      this.logger.info(`📺 Stream selecionado: ${this.currentStream.type}`);
 
-      // Criar pipe path
+      // 3. CRIAR PIPE PATH
       this.currentPipePath = this.getPipePath();
+      this.logger.info(`🔧 Pipe path: ${this.currentPipePath}`);
 
-      // Criar canal TVHeadend
+      // 4. CRIAR CANAIS TVHEADEND
       await this.setupTVHeadendChannel();
 
-      // Iniciar streaming (async, não aguardar)
+      // 5. INICIAR STREAMING (agora retorna o PipeReader!)
       this.status = 'streaming';
-      this.startStreamingAsync();
+      await this.startStreamingAsync();
 
-      // Iniciar monitoramento
+      // 6. INICIAR MONITORAMENTO
       this.startHealthCheck();
 
       this.emit('streamFound', {
         site: this.site,
         stream: this.currentStream,
-        sessionId: this.getSessionId()
+        sessionId: this.getSessionId(),
+        pipePath: this.currentPipePath
       });
 
-      this.logger.info('Sessão iniciada com sucesso');
+      this.logger.info('✅ Sessão iniciada com sucesso');
       return true;
 
     } catch (error) {
       this.status = 'error';
       this.isRunning = false;
-      this.logger.error('Erro ao iniciar sessão:', error);
+      this.logger.error(`❌ Erro ao iniciar sessão: ${error.message}`);
       this.emit('error', error);
       throw error;
     }
   }
 
   async stop() {
-    this.logger.info('Parando sessão...');
+    this.logger.info('⏹️ Parando sessão...');
     this.isRunning = false;
     this.status = 'stopping';
 
     try {
-      // Parar monitoramento
+      // 1. PARAR MONITORAMENTO
       if (this.healthCheckInterval) {
         clearInterval(this.healthCheckInterval);
         this.healthCheckInterval = null;
       }
 
-      // Parar streaming
-      this.streamlinkManager.stopAllProcesses();
+      // 2. PARAR STREAMLINK + PIPEREADER
+      if (this.currentProcessId) {
+        this.logger.debug(`Parando processo: ${this.currentProcessId}`);
+        this.streamlinkManager.stopProcess(this.currentProcessId);
+        this.currentProcessId = null;
+      } else {
+        // Fallback: parar todos
+        this.streamlinkManager.stopAllProcesses();
+      }
 
-      // Cleanup pipe
+      // 3. LIMPAR REFERÊNCIA PIPEREADER
+      this.pipeReader = null;
+
+      // 4. REMOVER PIPE (se ainda existir)
       if (this.currentPipePath && fs.existsSync(this.currentPipePath)) {
         try {
-          fs.unlinkSync(this.currentPipePath);
-          this.logger.debug(`Pipe removida: ${this.currentPipePath}`);
+          const stats = fs.statSync(this.currentPipePath);
+          if (stats.isFIFO()) {
+            fs.unlinkSync(this.currentPipePath);
+            this.logger.debug(`🗑️ Pipe removida: ${this.currentPipePath}`);
+          }
         } catch (error) {
-          this.logger.warn(`Erro ao remover pipe: ${error.message}`);
+          this.logger.warn(`⚠️ Erro ao remover pipe: ${error.message}`);
         }
       }
 
-      // Cleanup TVHeadend
+      // 5. CLEANUP TVHEADEND
       await this.tvheadend.removeChannel(this.getChannelName());
 
       this.status = 'stopped';
       this.emit('ended', { sessionId: this.getSessionId() });
-      this.logger.info('Sessão parada');
+      this.logger.info('✅ Sessão parada');
 
     } catch (error) {
-      this.logger.error('Erro ao parar sessão:', error);
+      this.logger.error(`❌ Erro ao parar sessão: ${error.message}`);
     }
   }
 
   async restart() {
     this.restartCount++;
-    this.logger.info(`Reiniciando sessão (tentativa ${this.restartCount})...`);
+    this.logger.info(`🔄 Reiniciando sessão (tentativa ${this.restartCount})...`);
 
     try {
       await this.stop();
@@ -127,7 +148,7 @@ export default class CaptureSession extends EventEmitter {
       await this.start();
       return true;
     } catch (error) {
-      this.logger.error('Erro ao reiniciar sessão:', error);
+      this.logger.error(`❌ Erro ao reiniciar sessão: ${error.message}`);
       return false;
     }
   }
@@ -173,17 +194,17 @@ export default class CaptureSession extends EventEmitter {
   async setupTVHeadendChannel() {
     const channelName = this.getChannelName();
     
-    // Criar canal pipe
-    await this.tvheadend.createPipeChannel(channelName, this.currentPipePath);
+    // Criar canal HTTP (principal)
+    const httpUrl = `http://stream-capture:8080/${this.site.id}/stream`;
+    await this.tvheadend.createHttpChannel(channelName, httpUrl);
     
-    // Criar canal HTTP (backup)
-    const httpUrl = `http://stream-capture:8080/${this.site.id}/stream.m3u8`;
-    await this.tvheadend.createHttpChannel(`${channelName}_http`, httpUrl);
-    
-    this.logger.info(`Canais TVHeadend criados: ${channelName}`);
+    this.logger.info(`📺 Canal TVHeadend criado: ${channelName}`);
+    this.logger.info(`🔗 URL: ${httpUrl}`);
   }
 
-  // Iniciar streaming de forma assíncrona
+  /**
+   * MODIFICADO: Agora guarda referência ao PipeReader
+   */
   async startStreamingAsync() {
     try {
       const streamUrl = this.currentStream.type === 'separate' 
@@ -197,19 +218,33 @@ export default class CaptureSession extends EventEmitter {
         retryStreams: this.site.streamlink?.retryStreams || 3,
         retryMax: this.site.streamlink?.retryMax || 5,
         customArgs: this.site.streamlink?.customArgs || '',
-        timeout: 600 // 10 minutos
+        timeout: 600
       };
 
-      this.logger.info('Iniciando Streamlink...');
+      this.logger.info(`📡 Iniciando Streamlink para: ${streamUrl.substring(0, 80)}...`);
+      this.logger.debug(`⚙️ Opções: quality=${options.quality}, referer=${options.referer ? 'sim' : 'não'}`);
       
+      // Streamlink agora cria o PipeReader internamente
       const success = await this.streamlinkManager.streamToOutput(
         streamUrl,
         this.currentPipePath,
         options
       );
 
+      // Obter referência ao PipeReader criado
+      const allReaders = this.streamlinkManager.getAllPipeReaders();
+      if (allReaders.size > 0) {
+        // Pegar o mais recente (último adicionado)
+        const readersArray = Array.from(allReaders.values());
+        this.pipeReader = readersArray[readersArray.length - 1];
+        
+        if (this.pipeReader) {
+          this.logger.info(`✅ PipeReader obtido - ${this.pipeReader.clients.size} clientes conectados`);
+        }
+      }
+
       if (!success && this.isRunning) {
-        this.logger.warn('Streamlink terminou sem sucesso, tentando restart...');
+        this.logger.warn('⚠️ Streamlink terminou sem sucesso, tentando restart...');
         setTimeout(() => {
           if (this.isRunning) {
             this.restart();
@@ -218,7 +253,7 @@ export default class CaptureSession extends EventEmitter {
       }
 
     } catch (error) {
-      this.logger.error('Erro no streaming:', error);
+      this.logger.error(`❌ Erro no streaming: ${error.message}`);
       if (this.isRunning) {
         setTimeout(() => this.restart(), 5000);
       }
@@ -231,6 +266,8 @@ export default class CaptureSession extends EventEmitter {
     this.healthCheckInterval = setInterval(async () => {
       await this.performHealthCheck();
     }, interval * 1000);
+    
+    this.logger.debug(`💓 Health check iniciado (intervalo: ${interval}s)`);
   }
 
   async performHealthCheck() {
@@ -240,26 +277,40 @@ export default class CaptureSession extends EventEmitter {
       const uptime = Date.now() - this.startTime;
       const maxUptime = this.configManager.config.streaming?.autoRestart?.tokenExpiryCheck || 1800;
 
-      // Verificar se token expirou (30 minutos)
+      // Verificar se token expirou (30 minutos padrão)
       if (uptime > maxUptime * 1000) {
-        this.logger.info('Token pode ter expirado, reiniciando sessão...');
+        this.logger.info('⏱️ Token pode ter expirado, reiniciando sessão...');
         await this.restart();
         return;
       }
 
       // Verificar se pipe ainda existe
       if (this.currentPipePath && !fs.existsSync(this.currentPipePath)) {
-        this.logger.warn('Pipe não existe mais, recriando...');
+        this.logger.warn('⚠️ Pipe não existe mais, recriando sessão...');
         await this.restart();
+        return;
+      }
+
+      // Verificar se PipeReader está ativo
+      if (this.pipeReader && !this.pipeReader.isActive()) {
+        this.logger.warn('⚠️ PipeReader não está ativo, reiniciando...');
+        await this.restart();
+        return;
+      }
+
+      // Log de estatísticas periódicas
+      if (this.pipeReader) {
+        const stats = this.pipeReader.getStats();
+        this.logger.debug(`📊 Health: Uptime=${this.formatUptime(uptime)}, Clientes=${stats.clients}, Buffer=${this.formatBytes(stats.bufferSize)}`);
       }
 
     } catch (error) {
-      this.logger.error('Erro no health check:', error);
+      this.logger.error(`❌ Erro no health check: ${error.message}`);
     }
   }
 
   getStatus() {
-    return {
+    const status = {
       sessionId: this.getSessionId(),
       siteId: this.site.id,
       siteName: this.site.name,
@@ -269,8 +320,16 @@ export default class CaptureSession extends EventEmitter {
       restartCount: this.restartCount,
       currentStream: this.currentStream,
       isRunning: this.isRunning,
-      pipePath: this.currentPipePath
+      pipePath: this.currentPipePath,
+      pipeReader: null
     };
+
+    // Adicionar stats do PipeReader se disponível
+    if (this.pipeReader) {
+      status.pipeReader = this.pipeReader.getStats();
+    }
+
+    return status;
   }
 
   getSessionId() {
@@ -284,5 +343,27 @@ export default class CaptureSession extends EventEmitter {
   getPipePath() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     return `/app/timeshift/stream_${this.site.id}_${timestamp}.pipe`;
+  }
+
+  formatUptime(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes % 60}m`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${seconds % 60}s`;
+    } else {
+      return `${seconds}s`;
+    }
+  }
+
+  formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 }

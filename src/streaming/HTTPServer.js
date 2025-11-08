@@ -17,7 +17,8 @@ export default class HTTPServer {
     
     return new Promise((resolve, reject) => {
       this.server = this.app.listen(this.port, '0.0.0.0', () => {
-        this.logger.info(`Servidor HTTP ativo na porta ${this.port}`);
+        this.logger.info(`🌐 Servidor HTTP ativo na porta ${this.port}`);
+        this.logger.info(`📡 Streams disponíveis em: http://stream-capture:${this.port}/<site_id>/stream`);
         resolve();
       });
       
@@ -29,7 +30,7 @@ export default class HTTPServer {
     if (this.server) {
       return new Promise((resolve) => {
         this.server.close(() => {
-          this.logger.info('Servidor HTTP parado');
+          this.logger.info('⏹️ Servidor HTTP parado');
           resolve();
         });
       });
@@ -38,136 +39,105 @@ export default class HTTPServer {
 
   setupMiddleware() {
     this.app.use(express.json());
+    
+    // CORS
     this.app.use((req, res, next) => {
       res.header('Access-Control-Allow-Origin', '*');
       res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
       res.header('Access-Control-Allow-Headers', 'Content-Type');
       next();
     });
+
+    // Log de requisições
+    this.app.use((req, res, next) => {
+      this.logger.debug(`📥 ${req.method} ${req.url} - ${req.ip}`);
+      next();
+    });
   }
 
   setupRoutes() {
-    // Rota principal de stream (global)
-    this.app.get('/stream.m3u8', (req, res) => {
-      const sessions = this.sessionManager.getSessionsStatus();
-      const activeSessions = Object.values(sessions).filter(s => s.isRunning);
+    // ROTA PRINCIPAL: Stream via chunks HTTP
+    this.app.get('/:siteId/stream', (req, res) => {
+      const { siteId } = req.params;
       
-      if (activeSessions.length === 0) {
-        res.status(404).send('Nenhum stream ativo');
+      this.logger.info(`📺 Nova requisição de stream: ${siteId} de ${req.ip}`);
+      
+      // Obter sessão ativa
+      const session = this.sessionManager.activeSessions.get(siteId);
+      
+      if (!session) {
+        this.logger.warn(`❌ Sessão não encontrada: ${siteId}`);
+        res.status(404).send(`Stream '${siteId}' não está ativo`);
         return;
       }
-      
-      // Retornar primeiro stream ativo
-      const session = activeSessions[0];
-      const streamUrl = this.getStreamUrl(session.currentStream);
-      
-      if (streamUrl) {
-        this.logger.debug(`Redirecionamento global: ${streamUrl.substring(0, 100)}...`);
-        res.redirect(streamUrl);
-      } else {
-        res.status(404).send('Stream não disponível');
+
+      if (!session.isRunning) {
+        this.logger.warn(`❌ Sessão não está rodando: ${siteId}`);
+        res.status(503).send(`Stream '${siteId}' não está rodando`);
+        return;
       }
+
+      // Obter PipeReader da sessão
+      const pipeReader = session.pipeReader;
+      
+      if (!pipeReader || !pipeReader.isActive()) {
+        this.logger.warn(`❌ PipeReader não ativo para: ${siteId}`);
+        res.status(503).send(`Stream '${siteId}' não está disponível (PipeReader inativo)`);
+        return;
+      }
+
+      // Configurar headers para streaming
+      res.setHeader('Content-Type', 'video/mp2t');
+      res.setHeader('Transfer-Encoding', 'chunked');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+
+      // Adicionar cliente ao PipeReader
+      pipeReader.addClient(res);
+      
+      this.logger.info(`✅ Cliente conectado ao stream ${siteId} (Total clientes: ${pipeReader.clients.size})`);
+
+      // Monitorar desconexão
+      req.on('close', () => {
+        this.logger.info(`❌ Cliente desconectou do stream ${siteId}`);
+      });
+
+      req.on('error', (error) => {
+        this.logger.warn(`⚠️ Erro na conexão do cliente ${siteId}: ${error.message}`);
+      });
     });
 
-    // Rotas específicas por site
+    // ROTA: M3U8 Playlist (compatibilidade)
     this.app.get('/:siteId/stream.m3u8', (req, res) => {
       const { siteId } = req.params;
-      const sessions = this.sessionManager.getSessionsStatus();
-      const session = sessions[siteId];
+      
+      this.logger.debug(`📋 Requisição M3U8: ${siteId}`);
+      
+      const session = this.sessionManager.activeSessions.get(siteId);
       
       if (!session || !session.isRunning) {
         res.status(404).send(`Stream ${siteId} não ativo`);
         return;
       }
-      
-      const streamUrl = this.getStreamUrl(session.currentStream);
-      
-      if (streamUrl) {
-        this.logger.debug(`Redirecionamento ${siteId}: ${streamUrl.substring(0, 100)}...`);
-        res.redirect(streamUrl);
-      } else {
-        res.status(404).send('Stream não disponível');
-      }
+
+      // Gerar playlist M3U8 simples
+      const m3u8Content = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXT-X-MEDIA-SEQUENCE:0
+#EXTINF:10.0,
+http://stream-capture:${this.port}/${siteId}/stream
+#EXT-X-ENDLIST
+`;
+
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.send(m3u8Content);
     });
 
-    // Status de um site específico
+    // ROTA: Status de um stream específico
     this.app.get('/:siteId/status', (req, res) => {
-      const { siteId } = req.params;
-      const sessions = this.sessionManager.getSessionsStatus();
-      const session = sessions[siteId];
-      
-      if (!session) {
-        res.status(404).json({ error: 'Sessão não encontrada' });
-        return;
-      }
-      
-      res.json(session);
-    });
-
-    // Status global
-    this.app.get('/status', (req, res) => {
-      const sessions = this.sessionManager.getSessionsStatus();
-      const activeSessions = Object.values(sessions).filter(s => s.isRunning);
-      
-      res.json({
-        totalSessions: Object.keys(sessions).length,
-        activeSessions: activeSessions.length,
-        sessions: sessions,
-        timestamp: new Date().toISOString()
-      });
-    });
-
-    // Lista de streams disponíveis
-    this.app.get('/streams', (req, res) => {
-      const sessions = this.sessionManager.getSessionsStatus();
-      const streams = {};
-      
-      Object.entries(sessions).forEach(([siteId, session]) => {
-        if (session.isRunning && session.currentStream) {
-          streams[siteId] = {
-            name: session.siteName,
-            url: `/api/streams/${siteId}/stream.m3u8`,
-            type: session.currentStream.type,
-            uptime: session.uptime,
-            status: session.status
-          };
-        }
-      });
-      
-      res.json(streams);
-    });
-
-    // Informações detalhadas de um stream
-    this.app.get('/:siteId/info', (req, res) => {
-      const { siteId } = req.params;
-      const sessions = this.sessionManager.getSessionsStatus();
-      const session = sessions[siteId];
-      
-      if (!session) {
-        res.status(404).json({ error: 'Sessão não encontrada' });
-        return;
-      }
-      
-      res.json({
-        ...session,
-        streamUrl: session.currentStream ? this.getStreamUrl(session.currentStream) : null,
-        httpUrl: `/${siteId}/stream.m3u8`
-      });
-    });
-  }
-
-  getStreamUrl(streamConfig) {
-    if (!streamConfig) return null;
-    
-    switch (streamConfig.type) {
-      case 'separate':
-        return streamConfig.video;
-      case 'combined':
-      case 'video-only':
-      case 'audio-only':
-        return streamConfig.url;
-      default:
-        return null;
-    }
-  }
-}
+      const {

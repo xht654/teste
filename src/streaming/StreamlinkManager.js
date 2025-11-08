@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
-import path from 'path';
 import Logger from '../utils/Logger.js';
+import PipeReader from './PipeReader.js';
 
 export default class StreamlinkManager {
   constructor() {
@@ -9,8 +9,9 @@ export default class StreamlinkManager {
     this.activeProcesses = new Map();
   }
 
-  // NOVA ABORDAGEM: Streamlink escreve diretamente em arquivo TS
-  // Depois criamos um loop que lê arquivo e escreve na pipe
+  /**
+   * Inicia streaming via Pipe → PipeReader
+   */
   async streamToOutput(streamUrl, outputPath, options = {}) {
     const {
       quality = 'best',
@@ -23,27 +24,52 @@ export default class StreamlinkManager {
     } = options;
 
     try {
-      // SIMPLIFICAÇÃO: Usar arquivo .ts diretamente, não criar pipe
-      const tempFile = outputPath.replace('.pipe', '.ts');
+      this.logger.info(`🚀 Iniciando captura via PIPE para: ${outputPath}`);
       
-      // NÃO criar pipe - vamos usar o arquivo .ts via HTTP
-      // await this.createPipe(outputPath);
+      // 1. CRIAR PIPE
+      await this.createPipe(outputPath);
+      
+      // 2. INICIAR PIPE READER (antes do Streamlink!)
+      const pipeReader = new PipeReader(outputPath, {
+        bufferDuration: 60,
+        maxBufferSize: 10 * 1024 * 1024 // 10MB
+      });
 
-      // Argumentos Streamlink - escrever em arquivo
+      // Event listeners do PipeReader
+      pipeReader.on('ready', () => {
+        this.logger.info('✅ PipeReader pronto e aguardando dados');
+      });
+
+      pipeReader.on('error', (error) => {
+        this.logger.error(`❌ Erro no PipeReader: ${error.message}`);
+      });
+
+      pipeReader.on('end', () => {
+        this.logger.warn('⚠️ PipeReader encerrado (Streamlink parou de escrever)');
+      });
+
+      // Iniciar leitura da pipe
+      await pipeReader.start();
+      
+      // Aguardar pipe estar pronta
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // 3. ARGUMENTOS STREAMLINK
       const streamlinkArgs = [
         '--loglevel', 'info',
-        '--output', tempFile, // Escrever em arquivo
+        '--output', outputPath, // ← PIPE (não .ts)
         '--force',
         '--retry-streams', retryStreams.toString(),
         '--retry-max', retryMax.toString(),
         '--stream-segment-timeout', '60.0',
         '--hls-live-restart',
-        '--stream-types', 'hls' // Forçar HLS simples
+        '--ringbuffer-size', '512K', // Buffer pequeno para baixa latência
+        '--stream-types', 'hls'
       ];
 
       if (referer) {
         streamlinkArgs.push('--http-header', `Referer=${referer}`);
-        this.logger.info(`Usando referer: ${referer}`);
+        this.logger.info(`🔗 Usando referer: ${referer}`);
       }
 
       if (userAgent) {
@@ -53,83 +79,116 @@ export default class StreamlinkManager {
       if (customArgs && customArgs.trim()) {
         const customArgArray = customArgs.trim().split(/\s+/);
         streamlinkArgs.push(...customArgArray);
-        this.logger.info(`Argumentos personalizados: ${customArgs}`);
+        this.logger.info(`⚙️ Argumentos personalizados: ${customArgs}`);
       }
 
       streamlinkArgs.push(streamUrl, quality);
 
       const streamlinkCmd = `streamlink ${streamlinkArgs.join(' ')}`;
-      this.logger.info(`Comando Streamlink: ${streamlinkCmd}`);
-      this.logger.info(`Arquivo de saída: ${tempFile}`);
-      this.logger.info(`🌐 Disponível via HTTP: /files/${path.basename(tempFile)}`);
+      this.logger.info(`📝 Comando Streamlink: ${streamlinkCmd.substring(0, 150)}...`);
+      this.logger.info(`🔧 Saída: PIPE → ${outputPath}`);
 
+      // 4. INICIAR STREAMLINK
       return new Promise((resolve, reject) => {
-        // Iniciar Streamlink
-        this.logger.debug('Iniciando Streamlink...');
+        this.logger.debug('🎬 Iniciando processo Streamlink...');
+        
         const streamlinkProcess = spawn('streamlink', streamlinkArgs, {
           stdio: ['ignore', 'pipe', 'pipe']
         });
 
         streamlinkProcess.on('spawn', () => {
-          this.logger.info('✅ Streamlink iniciado (PID: ' + streamlinkProcess.pid + ')');
+          this.logger.info(`✅ Streamlink iniciado (PID: ${streamlinkProcess.pid})`);
         });
 
         const processId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        this.activeProcesses.set(processId, { streamlink: streamlinkProcess });
+        
+        // Guardar referências
+        this.activeProcesses.set(processId, {
+          streamlink: streamlinkProcess,
+          pipeReader: pipeReader,
+          pipePath: outputPath,
+          startTime: Date.now()
+        });
 
         let isStable = false;
         let hasError = false;
         const startTime = Date.now();
 
-        // REMOVIDO: Leitor arquivo->pipe
-        // Agora usamos arquivo .ts diretamente via HTTP
-
-        // Aguardar arquivo ser criado e verificar se cresce
-        const waitForFile = setInterval(() => {
-          if (fs.existsSync(tempFile)) {
-            const stats = fs.statSync(tempFile);
-            if (stats.size > 0 && !isStable) {
-              isStable = true;
-              clearInterval(waitForFile);
-              this.logger.info(`✅ Arquivo .ts criado e com dados (${stats.size} bytes)`);
-            }
+        // Monitorar quando PipeReader começa a receber dados
+        const dataListener = () => {
+          if (!isStable) {
+            isStable = true;
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            this.logger.info(`✅ Stream estável após ${elapsed}s - Dados fluindo pela pipe!`);
           }
-        }, 500);
+        };
 
-        // Logs Streamlink
+        pipeReader.once('data', dataListener);
+
+        // Timeout para detectar stream estável
+        const stabilityTimeout = setTimeout(() => {
+          if (!isStable) {
+            this.logger.warn('⚠️ Stream não estabilizou em 15s, mas continuando...');
+          }
+        }, 15000);
+
+        // LOGS STREAMLINK STDOUT
+        streamlinkProcess.stdout.on('data', (data) => {
+          const output = data.toString().trim();
+          if (output) {
+            this.logger.debug(`[Streamlink STDOUT] ${output}`);
+          }
+        });
+
+        // LOGS STREAMLINK STDERR
         streamlinkProcess.stderr.on('data', (data) => {
           const output = data.toString();
           
           if (output.trim()) {
-            this.logger.debug(`STREAMLINK: ${output.trim()}`);
-          }
-          
-          if (output.includes('[cli][info]')) {
-            const cleanOutput = output.replace('[cli][info]', '').trim();
-            if (cleanOutput && !cleanOutput.includes('segment')) {
-              this.logger.info(`STREAMLINK: ${cleanOutput}`);
+            // Filtrar logs de segmentos (muito verboso)
+            if (!output.includes('segment') && !output.includes('Opening stream')) {
+              this.logger.debug(`[Streamlink] ${output.trim()}`);
             }
           }
           
-          if (output.includes('error:') || output.includes('Failed to')) {
-            this.logger.error(`STREAMLINK ERROR: ${output.trim()}`);
+          // Detectar mensagens importantes
+          if (output.includes('[cli][info]')) {
+            const cleanOutput = output.replace('[cli][info]', '').trim();
+            if (cleanOutput && !cleanOutput.includes('segment')) {
+              this.logger.info(`📡 Streamlink: ${cleanOutput}`);
+            }
+          }
+          
+          // Detectar erros
+          if (output.includes('error:') || output.includes('Failed to') || output.includes('Unable to')) {
+            this.logger.error(`❌ Streamlink ERROR: ${output.trim()}`);
             hasError = true;
+          }
+
+          // Detectar quando stream inicia
+          if (output.includes('Opening stream') || output.includes('Writing output')) {
+            this.logger.info('📺 Streamlink iniciou escrita na pipe');
           }
         });
 
-        // Handle exit
+        // STREAMLINK EXIT
         streamlinkProcess.on('close', (code) => {
+          clearTimeout(stabilityTimeout);
+          pipeReader.off('data', dataListener);
+          
           const duration = Math.round((Date.now() - startTime) / 1000);
-          this.logger.info(`Streamlink terminou com código ${code} após ${duration}s`);
+          this.logger.info(`⏹️ Streamlink terminou com código ${code} após ${duration}s`);
           
-          clearInterval(waitForFile);
+          // Parar PipeReader
+          if (pipeReader.isActive()) {
+            this.logger.debug('Parando PipeReader...');
+            pipeReader.stop();
+          }
 
-          // NÃO remover arquivo .ts - será usado via HTTP
-          this.logger.info(`📁 Arquivo mantido: ${tempFile}`);
-          
           // Cleanup
           this.activeProcesses.delete(processId);
           
+          // Determinar sucesso
           if (code === 0 || (isStable && code !== 1)) {
             resolve(true);
           } else if (hasError) {
@@ -139,69 +198,180 @@ export default class StreamlinkManager {
           }
         });
 
-        // Error handling
+        // STREAMLINK ERROR
         streamlinkProcess.on('error', (error) => {
-          this.logger.error('❌ Erro ao iniciar Streamlink:', error);
-          clearInterval(waitForFile);
+          clearTimeout(stabilityTimeout);
+          this.logger.error(`❌ Erro ao iniciar Streamlink: ${error.message}`);
+          
+          if (pipeReader.isActive()) {
+            pipeReader.stop();
+          }
+          
           this.activeProcesses.delete(processId);
           reject(error);
         });
 
-        // Timeout
+        // TIMEOUT GLOBAL
         const timeoutHandle = setTimeout(() => {
           if (!streamlinkProcess.killed) {
-            this.logger.warn(`Timeout após ${timeout}s`);
+            this.logger.warn(`⏱️ Timeout após ${timeout}s - Encerrando Streamlink`);
             streamlinkProcess.kill('SIGTERM');
             setTimeout(() => {
-              if (!streamlinkProcess.killed) streamlinkProcess.kill('SIGKILL');
+              if (!streamlinkProcess.killed) {
+                streamlinkProcess.kill('SIGKILL');
+              }
             }, 5000);
           }
         }, timeout * 1000);
 
         streamlinkProcess.on('close', () => {
           clearTimeout(timeoutHandle);
-          clearInterval(waitForFile);
         });
       });
 
     } catch (error) {
-      this.logger.error('Erro ao iniciar streaming:', error);
+      this.logger.error(`❌ Erro ao iniciar streaming: ${error.message}`);
       throw error;
     }
   }
 
-  // Criar named pipe
+  /**
+   * Criar named pipe
+   */
   async createPipe(pipePath) {
     try {
+      // Remover pipe antiga se existir
       if (fs.existsSync(pipePath)) {
-        fs.unlinkSync(pipePath);
-        this.logger.debug(`Pipe antiga removida: ${pipePath}`);
+        const stats = fs.statSync(pipePath);
+        
+        if (stats.isFIFO()) {
+          this.logger.debug(`🗑️ Removendo pipe antiga: ${pipePath}`);
+          fs.unlinkSync(pipePath);
+        } else {
+          // Se for arquivo normal, remover também
+          this.logger.warn(`⚠️ ${pipePath} não é uma pipe, removendo arquivo`);
+          fs.unlinkSync(pipePath);
+        }
       }
 
+      // Criar nova pipe
       const { execSync } = await import('child_process');
       execSync(`mkfifo "${pipePath}"`);
       fs.chmodSync(pipePath, 0o666);
       
       this.logger.info(`✅ Named pipe criada: ${pipePath}`);
+      
+      // Verificar se foi criada corretamente
+      const stats = fs.statSync(pipePath);
+      if (!stats.isFIFO()) {
+        throw new Error('Falha ao criar pipe: arquivo criado não é FIFO');
+      }
+      
       return true;
     } catch (error) {
-      this.logger.error(`Erro ao criar pipe: ${error.message}`);
+      this.logger.error(`❌ Erro ao criar pipe: ${error.message}`);
       throw error;
     }
   }
 
-  // Parar todos os processos
-  stopAllProcesses() {
-    this.logger.info('Parando todos os processos...');
-    for (const [id, processes] of this.activeProcesses) {
-      if (processes.streamlink && !processes.streamlink.killed) {
-        processes.streamlink.kill('SIGTERM');
-      }
-    }
-    this.activeProcesses.clear();
+  /**
+   * Obter PipeReader de um processo ativo
+   */
+  getPipeReader(processId) {
+    const process = this.activeProcesses.get(processId);
+    return process ? process.pipeReader : null;
   }
 
-  // Outros métodos permanecem iguais...
+  /**
+   * Obter todos os PipeReaders ativos
+   */
+  getAllPipeReaders() {
+    const readers = new Map();
+    for (const [id, process] of this.activeProcesses) {
+      if (process.pipeReader) {
+        readers.set(id, process.pipeReader);
+      }
+    }
+    return readers;
+  }
+
+  /**
+   * Parar processo específico
+   */
+  stopProcess(processId) {
+    const processes = this.activeProcesses.get(processId);
+    
+    if (processes) {
+      this.logger.info(`🛑 Parando processo: ${processId}`);
+      
+      // Parar Streamlink
+      if (processes.streamlink && !processes.streamlink.killed) {
+        processes.streamlink.kill('SIGTERM');
+        setTimeout(() => {
+          if (!processes.streamlink.killed) {
+            processes.streamlink.kill('SIGKILL');
+          }
+        }, 5000);
+      }
+      
+      // Parar PipeReader
+      if (processes.pipeReader && processes.pipeReader.isActive()) {
+        processes.pipeReader.stop();
+      }
+      
+      // Remover pipe
+      if (processes.pipePath && fs.existsSync(processes.pipePath)) {
+        try {
+          fs.unlinkSync(processes.pipePath);
+          this.logger.debug(`🗑️ Pipe removida: ${processes.pipePath}`);
+        } catch (error) {
+          this.logger.warn(`⚠️ Erro ao remover pipe: ${error.message}`);
+        }
+      }
+      
+      this.activeProcesses.delete(processId);
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Parar todos os processos
+   */
+  stopAllProcesses() {
+    this.logger.info('🛑 Parando todos os processos...');
+    
+    const processIds = Array.from(this.activeProcesses.keys());
+    processIds.forEach(id => this.stopProcess(id));
+    
+    this.activeProcesses.clear();
+    this.logger.info('✅ Todos os processos parados');
+  }
+
+  /**
+   * Obter estatísticas de todos os processos
+   */
+  getStats() {
+    const stats = [];
+    
+    for (const [id, process] of this.activeProcesses) {
+      stats.push({
+        processId: id,
+        pipePath: process.pipePath,
+        uptime: Date.now() - process.startTime,
+        pipeReader: process.pipeReader ? process.pipeReader.getStats() : null,
+        streamlinkPid: process.streamlink?.pid || null,
+        streamlinkAlive: process.streamlink && !process.streamlink.killed
+      });
+    }
+    
+    return stats;
+  }
+
+  /**
+   * Obter qualidades disponíveis (mantido para compatibilidade)
+   */
   async getAvailableQualities(streamUrl, referer = null) {
     const args = [streamUrl, '--json'];
     
@@ -232,15 +402,5 @@ export default class StreamlinkManager {
 
       process.on('error', reject);
     });
-  }
-
-  stopProcess(processId) {
-    const processes = this.activeProcesses.get(processId);
-    if (processes && processes.streamlink && !processes.streamlink.killed) {
-      processes.streamlink.kill('SIGTERM');
-      this.activeProcesses.delete(processId);
-      return true;
-    }
-    return false;
   }
 }

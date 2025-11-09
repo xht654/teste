@@ -15,11 +15,16 @@
       "priority": 1,
       "referer": "https://www.freeshot.live/",
       "vpnRequired": false,
+      "session": {
+        "autoRestart": true,
+        "maxRestarts": 999,
+        "restartDelay": 5000
+      },
       "streamlink": {
         "quality": "best",
         "retryStreams": 5,
         "retryMax": 10,
-        "customArgs": "--ringbuffer-size 1024M --retry-streams=5.0 --retry-max=12 --retry-open=10 --stream-segment-attempts=20 --stream-segment-threads=10 --stream-segment-timeout=60.0 --stream-timeout=240.0",
+        "customArgs": "--retry-streams=5.0 --retry-max=12 --retry-open=10 --stream-timeout 300 --stream-segment-timeout 60 --stream-segment-attempts 10 --stream-segment-threads 10 --hls-live-restart --ringbuffer-size 1024M",
         "useReferer": true
       },
       "patterns": {

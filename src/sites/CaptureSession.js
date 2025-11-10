@@ -64,14 +64,18 @@ export default class CaptureSession extends EventEmitter {
       await this.createPipe(this.currentPipePath);
       this.logger.info(`🔧 Pipe criada: ${this.currentPipePath}`);
 
-      // 4. INICIAR STREAMLINK (escreve na pipe)
+      // 4. ✅ INICIAR FFMPEG PRIMEIRO (abre a pipe para leitura)
       this.status = 'streaming';
-      await this.startStreamlink();
+      this.startFFmpegHLS(); // ← NÃO usar await aqui!
+      
+      // Aguardar FFmpeg abrir a pipe (2 segundos)
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // 5. ✅ NOVO: INICIAR FFMPEG (lê da pipe, converte para HLS)
-      await this.startFFmpegHLS();
+      // 5. INICIAR STREAMLINK (escreve na pipe - agora não bloqueia!)
+      this.startStreamlink(); // ← NÃO usar await aqui também!
 
-      // 6. CRIAR CANAIS TVHEADEND (usando HLS)
+      // 6. CRIAR CANAIS TVHEADEND (aguardar HLS estar pronto)
+      await new Promise(resolve => setTimeout(resolve, 5000));
       await this.setupTVHeadendChannel();
 
       // 7. INICIAR MONITORAMENTO
@@ -163,38 +167,40 @@ export default class CaptureSession extends EventEmitter {
     }
   }
 
-  async startStreamlink() {
-    try {
-      const streamUrl = this.currentStream.type === 'separate' 
-        ? this.currentStream.video 
-        : this.currentStream.url;
+  /**
+   * Inicia Streamlink (não aguarda finalização - roda em background)
+   */
+  startStreamlink() {
+    const streamUrl = this.currentStream.type === 'separate' 
+      ? this.currentStream.video 
+      : this.currentStream.url;
 
-      const options = {
-        quality: this.site.streamlink?.quality || 'best',
-        referer: this.site.referer || this.site.url,
-        userAgent: this.site.userAgent,
-        retryStreams: this.site.streamlink?.retryStreams || 3,
-        retryMax: this.site.streamlink?.retryMax || 5,
-        customArgs: this.site.streamlink?.customArgs || '',
-        timeout: 600
-      };
+    const options = {
+      quality: this.site.streamlink?.quality || 'best',
+      referer: this.site.referer || this.site.url,
+      userAgent: this.site.userAgent,
+      retryStreams: this.site.streamlink?.retryStreams || 3,
+      retryMax: this.site.streamlink?.retryMax || 5,
+      customArgs: this.site.streamlink?.customArgs || '',
+      timeout: 600
+    };
 
-      this.logger.info(`📡 Iniciando Streamlink → Pipe`);
-      
-      // Streamlink escreve na pipe de forma não-bloqueante
-      const processId = await this.streamlinkManager.streamToPipe(
-        streamUrl,
-        this.currentPipePath,
-        options
-      );
-
+    this.logger.info(`📡 Iniciando Streamlink → Pipe`);
+    
+    // Iniciar de forma assíncrona (não esperar)
+    this.streamlinkManager.streamToPipe(
+      streamUrl,
+      this.currentPipePath,
+      options
+    ).then(processId => {
       this.streamlinkProcessId = processId;
       this.logger.info(`✅ Streamlink iniciado (ID: ${processId})`);
-
-    } catch (error) {
+    }).catch(error => {
       this.logger.error(`❌ Erro no Streamlink: ${error.message}`);
-      throw error;
-    }
+      if (this.isRunning) {
+        setTimeout(() => this.restart(), 5000);
+      }
+    });
   }
 
   /**

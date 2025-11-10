@@ -98,7 +98,7 @@ check_config() {
 cleanup_old() {
     print_info "Limpando containers antigos..."
     
-    docker-compose down -v 2>/dev/null || true
+    docker compose down -v 2>/dev/null || true
     
     print_success "Cleanup concluído"
 }
@@ -107,7 +107,7 @@ cleanup_old() {
 build_images() {
     print_info "Building images Docker..."
     
-    docker-compose build --no-cache
+    docker compose build --no-cache
     
     print_success "Build concluído"
 }
@@ -119,9 +119,9 @@ start_services() {
     print_info "Iniciando serviços..."
     
     if [ -n "$profile" ]; then
-        docker-compose --profile "$profile" up -d
+        docker compose --profile "$profile" up -d
     else
-        docker-compose up -d
+        docker compose up -d
     fi
     
     print_success "Serviços iniciados"
@@ -157,7 +157,7 @@ check_status() {
     print_info "Verificando status dos serviços..."
     
     echo ""
-    docker-compose ps
+    docker compose ps
     echo ""
     
     # Verificar Web UI
@@ -197,7 +197,7 @@ show_next_steps() {
     echo "     vlc http://localhost:8080/hls/<site_id>/stream.m3u8"
     echo ""
     echo "  4. 📊 Ver logs:"
-    echo "     docker-compose logs -f stream-capture"
+    echo "     docker compose logs -f stream-capture"
     echo ""
     echo "  5. ⚙️ Configurar sites:"
     echo "     Edite config.json ou use Web UI"
@@ -320,7 +320,7 @@ deploy_complete() {
     build_images
     
     # Iniciar com ambos os profiles
-    docker-compose --profile cache --profile production up -d
+    docker compose --profile cache --profile production up -d
     
     wait_for_services
     check_status
@@ -334,8 +334,8 @@ rebuild() {
     
     cleanup_old
     
-    docker-compose build --no-cache --pull
-    docker-compose up -d
+    docker compose build --no-cache --pull
+    docker compose up -d
     
     wait_for_services
     check_status
@@ -348,7 +348,7 @@ stop_all() {
     print_header
     print_info "⏹️ Parando todos os serviços..."
     
-    docker-compose --profile cache --profile production down -v
+    docker compose --profile cache --profile production down -v
     
     print_success "Todos os serviços parados"
 }

@@ -4,7 +4,7 @@ set -e
 echo "🚀 Iniciando Stream Capture Multi-Sessão..."
 
 # Configurar permissões
-chown -R appuser:appuser /app/logs /app/timeshift 2>/dev/null || true
+chown -R appuser:appuser /app/logs /app/timeshift /app/hls 2>/dev/null || true
 
 # Verificar dependências
 echo "🔍 Verificando dependências..."
@@ -18,6 +18,12 @@ fi
 # Verificar Streamlink
 if ! command -v streamlink &> /dev/null; then
     echo "❌ Streamlink não encontrado"
+    exit 1
+fi
+
+# Verificar FFmpeg
+if ! command -v ffmpeg &> /dev/null; then
+    echo "❌ FFmpeg não encontrado"
     exit 1
 fi
 
@@ -67,16 +73,29 @@ if [ "$TZ" ]; then
 fi
 
 # Criar diretórios necessários
-mkdir -p /app/logs /app/timeshift /tmp/vpn
+mkdir -p /app/logs /app/timeshift /app/hls /tmp/vpn
 
 # Aguardar TVHeadend se necessário
 if [ "$TVHEADEND_HOST" ]; then
     echo "⏳ Aguardando TVHeadend em $TVHEADEND_HOST:${TVHEADEND_PORT:-9982}..."
-    timeout 60 bash -c "
-        until nc -z $TVHEADEND_HOST ${TVHEADEND_PORT:-9982}; do
-            sleep 2
-        done
-    " || echo "⚠️ TVHeadend não respondeu (continuando mesmo assim)"
+    
+    max_attempts=30
+    attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        # Usar curl em vez de nc
+        if curl -s --connect-timeout 2 http://$TVHEADEND_HOST:9981 > /dev/null 2>&1; then
+            echo "✅ TVHeadend disponível"
+            break
+        fi
+        
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    
+    if [ $attempt -eq $max_attempts ]; then
+        echo "⚠️ TVHeadend não respondeu (continuando mesmo assim)"
+    fi
 fi
 
 echo "✅ Inicialização concluída"
@@ -84,77 +103,3 @@ echo "🎯 Executando: $@"
 
 # Executar comando principal
 exec "$@"
-```
-
-### 7. nginx/nginx.conf - Load Balancer (Opcional)
-```nginx
-events {
-    worker_connections 1024;
-}
-
-http {
-    upstream stream_capture {
-        server stream-capture:3001;
-        # Adicionar mais instâncias se necessário
-        # server stream-capture-2:3001;
-    }
-
-    upstream stream_api {
-        server stream-capture:8080;
-        # server stream-capture:8081;
-    }
-
-    # Rate limiting
-    limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
-    limit_req_zone $binary_remote_addr zone=streams:10m rate=50r/s;
-
-    # Web UI
-    server {
-        listen 80;
-        server_name localhost;
-
-        # Security headers
-        add_header X-Frame-Options DENY;
-        add_header X-Content-Type-Options nosniff;
-        add_header X-XSS-Protection "1; mode=block";
-
-        # Web UI
-        location / {
-            proxy_pass http://stream_capture;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            
-            # WebSocket support
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-        }
-
-        # API com rate limiting
-        location /api/ {
-            limit_req zone=api burst=20 nodelay;
-            proxy_pass http://stream_capture;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        }
-
-        # Streams com rate limiting específico
-        location /streams/ {
-            limit_req zone=streams burst=100 nodelay;
-            proxy_pass http://stream_api/;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            
-            # Headers para streaming
-            proxy_buffering off;
-            proxy_cache off;
-            proxy_set_header Connection '';
-            proxy_http_version 1.1;
-            chunked_transfer_encoding off;
-        }
-    }
-}
-

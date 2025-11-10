@@ -1,4 +1,4 @@
-// src/sites/CaptureSession.js (MODIFICADO)
+// src/sites/CaptureSession.js (CORREÇÃO DO BUG)
 import EventEmitter from 'events';
 import fs from 'fs';
 import StreamDetector from '../core/StreamDetector.js';
@@ -16,7 +16,7 @@ export default class CaptureSession extends EventEmitter {
     
     this.streamDetector = new StreamDetector(site);
     this.streamlinkManager = new StreamlinkManager();
-    this.ffmpegHLSManager = new FFmpegHLSManager(); // ✅ NOVO
+    this.ffmpegHLSManager = new FFmpegHLSManager();
     this.tvheadend = new TVHeadendIntegration(configManager);
     
     this.status = 'idle';
@@ -24,8 +24,8 @@ export default class CaptureSession extends EventEmitter {
     this.currentStream = null;
     this.currentPipePath = null;
     this.streamlinkProcessId = null;
-    this.ffmpegProcessId = null; // ✅ NOVO
-    this.hlsInfo = null; // ✅ NOVO
+    this.ffmpegProcessId = null;
+    this.hlsInfo = null;
     this.restartCount = 0;
     this.isRunning = false;
     this.healthCheckInterval = null;
@@ -61,21 +61,22 @@ export default class CaptureSession extends EventEmitter {
 
       // 3. CRIAR PIPE
       this.currentPipePath = this.getPipePath();
-      await this.createPipe(this.currentPipePath);
-      this.logger.info(`🔧 Pipe criada: ${this.currentPipePath}`);
+      this.logger.info(`✅ Pipe criada: ${this.currentPipePath}`);
 
-      // 4. ✅ INICIAR FFMPEG PRIMEIRO (abre a pipe para leitura)
+      // 4. ✅ CORREÇÃO: USAR AWAIT para FFmpeg
       this.status = 'streaming';
-      this.startFFmpegHLS(); // ← NÃO usar await aqui!
+      this.logger.info(`🎬 Iniciando FFmpeg HLS...`);
       
-      // Aguardar FFmpeg abrir a pipe (2 segundos)
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // ✅ AGORA COM AWAIT - FFmpeg inicia e aguarda estar pronto
+      await this.startFFmpegHLS();
+      
+      this.logger.info(`✅ FFmpeg pronto! HLS Info populado.`);
 
-      // 5. INICIAR STREAMLINK (escreve na pipe - agora não bloqueia!)
-      this.startStreamlink(); // ← NÃO usar await aqui também!
+      // 5. INICIAR STREAMLINK (agora FFmpeg já está consumindo a pipe)
+      this.logger.info(`📡 Iniciando Streamlink...`);
+      this.startStreamlink(); // ← Sem await (roda em background)
 
-      // 6. CRIAR CANAIS TVHEADEND (aguardar HLS estar pronto)
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // 6. CRIAR CANAIS TVHEADEND
       await this.setupTVHeadendChannel();
 
       // 7. INICIAR MONITORAMENTO
@@ -86,7 +87,7 @@ export default class CaptureSession extends EventEmitter {
         stream: this.currentStream,
         sessionId: this.getSessionId(),
         pipePath: this.currentPipePath,
-        hlsPlaylist: this.hlsInfo?.playlistUrl // ✅ NOVO
+        hlsPlaylist: this.hlsInfo?.playlistUrl
       });
 
       this.logger.info('✅ Sessão iniciada com sucesso');
@@ -96,6 +97,10 @@ export default class CaptureSession extends EventEmitter {
       this.status = 'error';
       this.isRunning = false;
       this.logger.error(`❌ Erro ao iniciar sessão: ${error.message}`);
+      
+      // Cleanup em caso de erro
+      await this.cleanup();
+      
       this.emit('error', error);
       throw error;
     }
@@ -113,7 +118,7 @@ export default class CaptureSession extends EventEmitter {
         this.healthCheckInterval = null;
       }
 
-      // 2. ✅ PARAR FFMPEG
+      // 2. PARAR FFMPEG
       if (this.ffmpegProcessId) {
         this.logger.debug(`Parando FFmpeg: ${this.ffmpegProcessId}`);
         this.ffmpegHLSManager.stopProcess(this.ffmpegProcessId);
@@ -149,20 +154,37 @@ export default class CaptureSession extends EventEmitter {
     }
   }
 
-  async createPipe(pipePath) {
+  /**
+   * ✅ CORREÇÃO: Agora é async e retorna uma Promise
+   */
+  async startFFmpegHLS() {
     try {
-      if (fs.existsSync(pipePath)) {
-        fs.unlinkSync(pipePath);
-      }
+      this.logger.info(`🎬 Iniciando FFmpeg HLS para ${this.site.id}...`);
 
-      const { execSync } = await import('child_process');
-      execSync(`mkfifo "${pipePath}"`);
-      fs.chmodSync(pipePath, 0o666);
-      
-      this.logger.info(`✅ Pipe criada: ${pipePath}`);
-      return true;
+      const options = {
+        segmentDuration: 6,
+        playlistSize: 5,
+        deleteThreshold: 10,
+        videoCodec: 'copy',
+        audioCodec: 'copy',
+        hlsFlags: 'delete_segments+append_list+omit_endlist'
+      };
+
+      // ✅ AWAIT - Aguarda FFmpeg estar pronto e hlsInfo ser populado
+      const hlsInfo = await this.ffmpegHLSManager.startHLSConversion(
+        this.currentPipePath,
+        this.site.id,
+        options
+      );
+
+      this.ffmpegProcessId = hlsInfo.processId;
+      this.hlsInfo = hlsInfo; // ✅ AGORA hlsInfo está populado!
+
+      this.logger.info(`✅ FFmpeg HLS pronto!`);
+      this.logger.info(`📝 Playlist: ${hlsInfo.playlistUrl}`);
+
     } catch (error) {
-      this.logger.error(`❌ Erro ao criar pipe: ${error.message}`);
+      this.logger.error(`❌ Erro ao iniciar FFmpeg HLS: ${error.message}`);
       throw error;
     }
   }
@@ -203,44 +225,14 @@ export default class CaptureSession extends EventEmitter {
     });
   }
 
-  /**
-   * ✅ NOVO: Inicia FFmpeg para ler pipe e gerar HLS
-   */
-  async startFFmpegHLS() {
-    try {
-      this.logger.info(`🎬 Iniciando FFmpeg HLS...`);
-
-      const options = {
-        segmentDuration: 6,        // 6s por segmento
-        playlistSize: 5,            // 5 segmentos no playlist (30s)
-        deleteThreshold: 10,        // Deletar segmentos antigos
-        videoCodec: 'copy',         // Não recodificar (performance)
-        audioCodec: 'copy',
-        hlsFlags: 'delete_segments+append_list+omit_endlist'
-      };
-
-      const hlsInfo = await this.ffmpegHLSManager.startHLSConversion(
-        this.currentPipePath,
-        this.site.id,
-        options
-      );
-
-      this.ffmpegProcessId = hlsInfo.processId;
-      this.hlsInfo = hlsInfo;
-
-      this.logger.info(`✅ FFmpeg HLS pronto!`);
-      this.logger.info(`📝 Playlist: ${hlsInfo.playlistUrl}`);
-
-    } catch (error) {
-      this.logger.error(`❌ Erro ao iniciar FFmpeg HLS: ${error.message}`);
-      throw error;
-    }
-  }
-
   async setupTVHeadendChannel() {
     const channelName = this.getChannelName();
     
-    // ✅ USAR HLS em vez de pipe direta
+    // ✅ AGORA hlsInfo está garantidamente populado (usamos await acima)
+    if (!this.hlsInfo || !this.hlsInfo.playlistUrl) {
+      throw new Error('HLS Info não disponível - FFmpeg pode não ter iniciado corretamente');
+    }
+    
     const hlsUrl = `http://stream-capture:8080${this.hlsInfo.playlistUrl}`;
     
     await this.tvheadend.createHttpChannel(channelName, hlsUrl);
@@ -313,6 +305,29 @@ export default class CaptureSession extends EventEmitter {
     }
   }
 
+  async cleanup() {
+    this.logger.debug('🧹 Executando cleanup...');
+    
+    try {
+      // Parar processos se ainda estiverem rodando
+      if (this.ffmpegProcessId) {
+        this.ffmpegHLSManager.stopProcess(this.ffmpegProcessId);
+      }
+      
+      if (this.streamlinkProcessId) {
+        this.streamlinkManager.stopProcess(this.streamlinkProcessId);
+      }
+      
+      // Remover pipe
+      if (this.currentPipePath && fs.existsSync(this.currentPipePath)) {
+        fs.unlinkSync(this.currentPipePath);
+      }
+      
+    } catch (error) {
+      this.logger.debug(`Erro no cleanup: ${error.message}`);
+    }
+  }
+
   getStatus() {
     const status = {
       sessionId: this.getSessionId(),
@@ -329,12 +344,12 @@ export default class CaptureSession extends EventEmitter {
       ffmpegStats: null
     };
 
-    // ✅ Adicionar info HLS
+    // Adicionar info HLS
     if (this.hlsInfo) {
       status.hlsInfo = this.hlsInfo;
     }
 
-    // ✅ Adicionar stats do FFmpeg
+    // Adicionar stats do FFmpeg
     if (this.ffmpegProcessId) {
       status.ffmpegStats = this.ffmpegHLSManager.getProcessStats(this.ffmpegProcessId);
     }

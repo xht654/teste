@@ -40,10 +40,6 @@ export default class StreamlinkManager {
         '--force',
         '--retry-streams', retryStreams.toString(),
         '--retry-max', retryMax.toString(),
-        '--stream-segment-threads', '4',
-        '--hls-segment-attempts', '5',
-        '--hls-segment-timeout', '60',
-        '--stream-timeout', '300'
       ];
 
       // Referer

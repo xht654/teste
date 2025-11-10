@@ -1,5 +1,6 @@
 // src/sites/CaptureSession.js (CORREÇÃO DO BUG)
 import EventEmitter from 'events';
+import { execSync } from 'child_process';
 import fs from 'fs';
 import StreamDetector from '../core/StreamDetector.js';
 import StreamlinkManager from '../streaming/StreamlinkManager.js';

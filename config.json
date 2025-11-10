@@ -8,7 +8,7 @@
     "freeshot_dazn": {
       "name": "FreeShot DAZN F1",
       "url": "https://www.freeshot.live/live-tv/dazn-f1-es/241",
-      "enabled": false,
+      "enabled": true,
       "captureMethod": "simple",
       "waitTime": 10000,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -86,7 +86,7 @@
     "freeshot_sporttv1": {
       "name": "FreeShot sport-tv-1",
       "url": "https://www.freeshot.live/live-tv/sport-tv-1-pt/1",
-      "enabled": true,
+      "enabled": false,
       "captureMethod": "simple",
       "waitTime": 10000,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",

@@ -8,6 +8,84 @@
     "freeshot_dazn": {
       "name": "FreeShot DAZN F1",
       "url": "https://www.freeshot.live/live-tv/dazn-f1-es/241",
+      "enabled": false,
+      "captureMethod": "simple",
+      "waitTime": 10000,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "priority": 1,
+      "referer": "https://www.freeshot.live/",
+      "vpnRequired": false,
+      "session": {
+        "autoRestart": true,
+        "maxRestarts": 999,
+        "restartDelay": 5000
+      },
+      "streamlink": {
+        "quality": "best",
+        "retryStreams": 5,
+        "retryMax": 10,
+        "customArgs": "--retry-streams=5.0 --retry-max=12 --retry-open=10 --stream-timeout 300 --stream-segment-timeout 60 --stream-segment-attempts 10 --stream-segment-threads 10 --hls-live-restart --ringbuffer-size 1024M",
+        "useReferer": true
+      },
+      "patterns": {
+        "video": [
+          "tracks-v1",
+          "video",
+          "v1"
+        ],
+        "audio": [
+          "tracks-a1",
+          "audio",
+          "a1"
+        ],
+        "combined": [
+          "index.m3u8",
+          "playlist.m3u8",
+          "master.m3u8"
+        ]
+      },
+      "adProtection": {
+        "level": "off",
+        "customBlockedDomains": [],
+        "allowedDomains": [
+          "planetary.lovecdn.ru",
+          "lovecdn.ru",
+          "freeshot.live"
+        ]
+      },
+      "simpleCapture": {
+        "waitTime": 5000,
+        "patterns": [
+          {
+            "type": "combined",
+            "includes": [
+              ".m3u8",
+              "token="
+            ],
+            "description": "Streams M3U8 com token"
+          },
+          {
+            "type": "video",
+            "includes": [
+              "tracks-v1",
+              ".m3u8"
+            ],
+            "description": "Streams de vÃÂ­deo"
+          },
+          {
+            "type": "audio",
+            "includes": [
+              "tracks-a1",
+              ".m3u8"
+            ],
+            "description": "Streams de ÃÂ¡udio"
+          }
+        ]
+      }
+    },
+    "freeshot_sporttv1": {
+      "name": "FreeShot sport-tv-1",
+      "url": "https://www.freeshot.live/live-tv/sport-tv-1-pt/1",
       "enabled": true,
       "captureMethod": "simple",
       "waitTime": 10000,

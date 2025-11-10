@@ -196,39 +196,44 @@ export default class StreamlinkManager {
    * Criar named pipe
    */
   async createPipe(pipePath) {
-    try {
-      // Remover pipe antiga se existir
-      if (fs.existsSync(pipePath)) {
-        const stats = fs.statSync(pipePath);
-        
-        if (stats.isFIFO()) {
-          this.logger.debug(`🗑️ Removendo pipe antiga: ${pipePath}`);
-          fs.unlinkSync(pipePath);
-        } else {
-          this.logger.warn(`⚠️ ${pipePath} não é uma pipe, removendo arquivo`);
-          fs.unlinkSync(pipePath);
-        }
+  try {
+    // Se a pipe já existir, verificar o tipo
+    if (fs.existsSync(pipePath)) {
+      const stats = fs.statSync(pipePath);
+      
+      // Se for FIFO, reutilizar — não recriar
+      if (stats.isFIFO()) {
+        this.logger.debug(`📎 Pipe já existe, reutilizando: ${pipePath}`);
+        return true;
       }
 
-      // Criar nova pipe
-      const { execSync } = await import('child_process');
-      execSync(`mkfifo "${pipePath}"`);
-      fs.chmodSync(pipePath, 0o666);
-      
-      this.logger.info(`✅ Named pipe criada: ${pipePath}`);
-      
-      // Verificar se foi criada corretamente
-      const stats = fs.statSync(pipePath);
-      if (!stats.isFIFO()) {
-        throw new Error('Falha ao criar pipe: arquivo criado não é FIFO');
-      }
-      
-      return true;
-    } catch (error) {
-      this.logger.error(`❌ Erro ao criar pipe: ${error.message}`);
-      throw error;
+      // Se não for FIFO, remover e recriar
+      this.logger.warn(`⚠️ ${pipePath} não é uma pipe válida, removendo arquivo`);
+      fs.unlinkSync(pipePath);
     }
+
+    // Criar nova pipe
+    const { execSync } = await import('child_process');
+    execSync(`mkfifo "${pipePath}"`);
+    fs.chmodSync(pipePath, 0o666);
+    
+    this.logger.info(`✅ Named pipe criada: ${pipePath}`);
+
+    // Verificar se é FIFO
+    const stats = fs.statSync(pipePath);
+    if (!stats.isFIFO()) {
+      throw new Error('Falha ao criar pipe: arquivo criado não é FIFO');
+    }
+
+    return true;
+  } catch (error) {
+    this.logger.error(`❌ Erro ao criar pipe: ${error.message}`);
+    throw error;
   }
+}
+
+      
+  
 
   /**
    * Parar processo específico

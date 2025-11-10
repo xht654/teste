@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y \
     procps \
     htop \
     nano \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # ==========================================

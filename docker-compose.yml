@@ -1,4 +1,4 @@
-
+version: '3.8'
 
 services:
   # ==========================================
@@ -48,7 +48,7 @@ services:
       - TZ=Europe/Lisbon
       
       # Security
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-changeme-generate-random-key}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       
       # External Access (opcional)
       - USE_EXTERNAL_URL=${USE_EXTERNAL_URL:-false}

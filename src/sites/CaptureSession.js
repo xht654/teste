@@ -1,8 +1,9 @@
-
+// src/sites/CaptureSession.js (MODIFICADO)
 import EventEmitter from 'events';
 import fs from 'fs';
 import StreamDetector from '../core/StreamDetector.js';
 import StreamlinkManager from '../streaming/StreamlinkManager.js';
+import FFmpegHLSManager from '../streaming/FFmpegHLSManager.js';
 import TVHeadendIntegration from '../streaming/TVHeadendIntegration.js';
 import Logger from '../utils/Logger.js';
 
@@ -15,14 +16,16 @@ export default class CaptureSession extends EventEmitter {
     
     this.streamDetector = new StreamDetector(site);
     this.streamlinkManager = new StreamlinkManager();
+    this.ffmpegHLSManager = new FFmpegHLSManager(); // ✅ NOVO
     this.tvheadend = new TVHeadendIntegration(configManager);
     
     this.status = 'idle';
     this.startTime = null;
     this.currentStream = null;
     this.currentPipePath = null;
-    this.currentProcessId = null;
-    this.pipeReader = null; // ← NOVO: Referência ao PipeReader
+    this.streamlinkProcessId = null;
+    this.ffmpegProcessId = null; // ✅ NOVO
+    this.hlsInfo = null; // ✅ NOVO
     this.restartCount = 0;
     this.isRunning = false;
     this.healthCheckInterval = null;
@@ -56,25 +59,30 @@ export default class CaptureSession extends EventEmitter {
       this.currentStream = this.selectBestStream(streams);
       this.logger.info(`📺 Stream selecionado: ${this.currentStream.type}`);
 
-      // 3. CRIAR PIPE PATH
+      // 3. CRIAR PIPE
       this.currentPipePath = this.getPipePath();
-      this.logger.info(`🔧 Pipe path: ${this.currentPipePath}`);
+      await this.createPipe(this.currentPipePath);
+      this.logger.info(`🔧 Pipe criada: ${this.currentPipePath}`);
 
-      // 4. CRIAR CANAIS TVHEADEND
+      // 4. INICIAR STREAMLINK (escreve na pipe)
+      this.status = 'streaming';
+      await this.startStreamlink();
+
+      // 5. ✅ NOVO: INICIAR FFMPEG (lê da pipe, converte para HLS)
+      await this.startFFmpegHLS();
+
+      // 6. CRIAR CANAIS TVHEADEND (usando HLS)
       await this.setupTVHeadendChannel();
 
-      // 5. INICIAR STREAMING (agora retorna o PipeReader!)
-      this.status = 'streaming';
-      await this.startStreamingAsync();
-
-      // 6. INICIAR MONITORAMENTO
+      // 7. INICIAR MONITORAMENTO
       this.startHealthCheck();
 
       this.emit('streamFound', {
         site: this.site,
         stream: this.currentStream,
         sessionId: this.getSessionId(),
-        pipePath: this.currentPipePath
+        pipePath: this.currentPipePath,
+        hlsPlaylist: this.hlsInfo?.playlistUrl // ✅ NOVO
       });
 
       this.logger.info('✅ Sessão iniciada com sucesso');
@@ -101,27 +109,25 @@ export default class CaptureSession extends EventEmitter {
         this.healthCheckInterval = null;
       }
 
-      // 2. PARAR STREAMLINK + PIPEREADER
-      if (this.currentProcessId) {
-        this.logger.debug(`Parando processo: ${this.currentProcessId}`);
-        this.streamlinkManager.stopProcess(this.currentProcessId);
-        this.currentProcessId = null;
-      } else {
-        // Fallback: parar todos
-        this.streamlinkManager.stopAllProcesses();
+      // 2. ✅ PARAR FFMPEG
+      if (this.ffmpegProcessId) {
+        this.logger.debug(`Parando FFmpeg: ${this.ffmpegProcessId}`);
+        this.ffmpegHLSManager.stopProcess(this.ffmpegProcessId);
+        this.ffmpegProcessId = null;
       }
 
-      // 3. LIMPAR REFERÊNCIA PIPEREADER
-      this.pipeReader = null;
+      // 3. PARAR STREAMLINK
+      if (this.streamlinkProcessId) {
+        this.logger.debug(`Parando Streamlink: ${this.streamlinkProcessId}`);
+        this.streamlinkManager.stopProcess(this.streamlinkProcessId);
+        this.streamlinkProcessId = null;
+      }
 
-      // 4. REMOVER PIPE (se ainda existir)
+      // 4. REMOVER PIPE
       if (this.currentPipePath && fs.existsSync(this.currentPipePath)) {
         try {
-          const stats = fs.statSync(this.currentPipePath);
-          if (stats.isFIFO()) {
-            fs.unlinkSync(this.currentPipePath);
-            this.logger.debug(`🗑️ Pipe removida: ${this.currentPipePath}`);
-          }
+          fs.unlinkSync(this.currentPipePath);
+          this.logger.debug(`🗑️ Pipe removida: ${this.currentPipePath}`);
         } catch (error) {
           this.logger.warn(`⚠️ Erro ao remover pipe: ${error.message}`);
         }
@@ -139,6 +145,153 @@ export default class CaptureSession extends EventEmitter {
     }
   }
 
+  async createPipe(pipePath) {
+    try {
+      if (fs.existsSync(pipePath)) {
+        fs.unlinkSync(pipePath);
+      }
+
+      const { execSync } = await import('child_process');
+      execSync(`mkfifo "${pipePath}"`);
+      fs.chmodSync(pipePath, 0o666);
+      
+      this.logger.info(`✅ Pipe criada: ${pipePath}`);
+      return true;
+    } catch (error) {
+      this.logger.error(`❌ Erro ao criar pipe: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async startStreamlink() {
+    try {
+      const streamUrl = this.currentStream.type === 'separate' 
+        ? this.currentStream.video 
+        : this.currentStream.url;
+
+      const options = {
+        quality: this.site.streamlink?.quality || 'best',
+        referer: this.site.referer || this.site.url,
+        userAgent: this.site.userAgent,
+        retryStreams: this.site.streamlink?.retryStreams || 3,
+        retryMax: this.site.streamlink?.retryMax || 5,
+        customArgs: this.site.streamlink?.customArgs || '',
+        timeout: 600
+      };
+
+      this.logger.info(`📡 Iniciando Streamlink → Pipe`);
+      
+      // Streamlink escreve na pipe de forma não-bloqueante
+      const processId = await this.streamlinkManager.streamToPipe(
+        streamUrl,
+        this.currentPipePath,
+        options
+      );
+
+      this.streamlinkProcessId = processId;
+      this.logger.info(`✅ Streamlink iniciado (ID: ${processId})`);
+
+    } catch (error) {
+      this.logger.error(`❌ Erro no Streamlink: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ NOVO: Inicia FFmpeg para ler pipe e gerar HLS
+   */
+  async startFFmpegHLS() {
+    try {
+      this.logger.info(`🎬 Iniciando FFmpeg HLS...`);
+
+      const options = {
+        segmentDuration: 6,        // 6s por segmento
+        playlistSize: 5,            // 5 segmentos no playlist (30s)
+        deleteThreshold: 10,        // Deletar segmentos antigos
+        videoCodec: 'copy',         // Não recodificar (performance)
+        audioCodec: 'copy',
+        hlsFlags: 'delete_segments+append_list+omit_endlist'
+      };
+
+      const hlsInfo = await this.ffmpegHLSManager.startHLSConversion(
+        this.currentPipePath,
+        this.site.id,
+        options
+      );
+
+      this.ffmpegProcessId = hlsInfo.processId;
+      this.hlsInfo = hlsInfo;
+
+      this.logger.info(`✅ FFmpeg HLS pronto!`);
+      this.logger.info(`📝 Playlist: ${hlsInfo.playlistUrl}`);
+
+    } catch (error) {
+      this.logger.error(`❌ Erro ao iniciar FFmpeg HLS: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async setupTVHeadendChannel() {
+    const channelName = this.getChannelName();
+    
+    // ✅ USAR HLS em vez de pipe direta
+    const hlsUrl = `http://stream-capture:8080${this.hlsInfo.playlistUrl}`;
+    
+    await this.tvheadend.createHttpChannel(channelName, hlsUrl);
+    
+    this.logger.info(`📺 Canal TVHeadend criado: ${channelName}`);
+    this.logger.info(`🔗 URL HLS: ${hlsUrl}`);
+  }
+
+  async performHealthCheck() {
+    if (!this.isRunning) return;
+
+    try {
+      // Verificar FFmpeg
+      if (this.ffmpegProcessId) {
+        const health = this.ffmpegHLSManager.checkHealth(this.ffmpegProcessId);
+        
+        if (!health.healthy) {
+          this.logger.warn(`⚠️ FFmpeg unhealthy: ${health.reason}`);
+          await this.restart();
+          return;
+        }
+      }
+
+      // Verificar Streamlink (via processo ativo)
+      if (this.streamlinkProcessId) {
+        const process = this.streamlinkManager.activeProcesses.get(this.streamlinkProcessId);
+        if (!process || !process.streamlink || process.streamlink.killed) {
+          this.logger.warn('⚠️ Streamlink morreu, reiniciando...');
+          await this.restart();
+          return;
+        }
+      }
+
+      // Log de estatísticas periódicas
+      const uptime = Date.now() - this.startTime;
+      if (uptime % 60000 < 10000) { // A cada ~1 minuto
+        const stats = this.ffmpegHLSManager.getProcessStats(this.ffmpegProcessId);
+        if (stats) {
+          this.logger.info(`📊 Health OK: Uptime=${this.formatUptime(uptime)}, Segments=${stats.segmentCount}`);
+        }
+      }
+
+    } catch (error) {
+      this.logger.error(`❌ Erro no health check: ${error.message}`);
+    }
+  }
+
+  startHealthCheck() {
+    const interval = 30; // 30 segundos
+    
+    this.healthCheckInterval = setInterval(async () => {
+      await this.performHealthCheck();
+    }, interval * 1000);
+    
+    this.logger.debug(`💓 Health check iniciado (intervalo: ${interval}s)`);
+  }
+
   async restart() {
     this.restartCount++;
     this.logger.info(`🔄 Reiniciando sessão (tentativa ${this.restartCount})...`);
@@ -154,8 +307,36 @@ export default class CaptureSession extends EventEmitter {
     }
   }
 
+  getStatus() {
+    const status = {
+      sessionId: this.getSessionId(),
+      siteId: this.site.id,
+      siteName: this.site.name,
+      status: this.status,
+      startTime: this.startTime,
+      uptime: this.startTime ? Date.now() - this.startTime : 0,
+      restartCount: this.restartCount,
+      currentStream: this.currentStream,
+      isRunning: this.isRunning,
+      pipePath: this.currentPipePath,
+      hlsInfo: null,
+      ffmpegStats: null
+    };
+
+    // ✅ Adicionar info HLS
+    if (this.hlsInfo) {
+      status.hlsInfo = this.hlsInfo;
+    }
+
+    // ✅ Adicionar stats do FFmpeg
+    if (this.ffmpegProcessId) {
+      status.ffmpegStats = this.ffmpegHLSManager.getProcessStats(this.ffmpegProcessId);
+    }
+
+    return status;
+  }
+
   selectBestStream(streams) {
-    // Priorizar streams combinados
     if (streams.combined.length > 0) {
       return {
         type: 'combined',
@@ -181,156 +362,7 @@ export default class CaptureSession extends EventEmitter {
       };
     }
 
-    if (streams.audio) {
-      return {
-        type: 'audio-only',
-        url: streams.audio,
-        quality: 'best'
-      };
-    }
-
     return null;
-  }
-
-  async setupTVHeadendChannel() {
-    const channelName = this.getChannelName();
-    
-    // Criar canal HTTP (principal)
-    const httpUrl = `http://stream-capture:8080/${this.site.id}/stream`;
-    await this.tvheadend.createHttpChannel(channelName, httpUrl);
-    
-    this.logger.info(`📺 Canal TVHeadend criado: ${channelName}`);
-    this.logger.info(`🔗 URL: ${httpUrl}`);
-  }
-
-  /**
-   * MODIFICADO: Agora guarda referência ao PipeReader
-   */
-  async startStreamingAsync() {
-    try {
-      const streamUrl = this.currentStream.type === 'separate' 
-        ? this.currentStream.video 
-        : this.currentStream.url;
-
-      const options = {
-        quality: this.site.streamlink?.quality || 'best',
-        referer: this.site.referer || this.site.url,
-        userAgent: this.site.userAgent,
-        retryStreams: this.site.streamlink?.retryStreams || 3,
-        retryMax: this.site.streamlink?.retryMax || 5,
-        customArgs: this.site.streamlink?.customArgs || '',
-        timeout: 600
-      };
-
-      this.logger.info(`📡 Iniciando Streamlink para: ${streamUrl.substring(0, 80)}...`);
-      this.logger.debug(`⚙️ Opções: quality=${options.quality}, referer=${options.referer ? 'sim' : 'não'}`);
-      
-      // Streamlink agora cria o PipeReader internamente
-      const success = await this.streamlinkManager.streamToOutput(
-        streamUrl,
-        this.currentPipePath,
-        options
-      );
-
-      // Obter referência ao PipeReader criado
-      const allReaders = this.streamlinkManager.getAllPipeReaders();
-      if (allReaders.size > 0) {
-        // Pegar o mais recente (último adicionado)
-        const readersArray = Array.from(allReaders.values());
-        this.pipeReader = readersArray[readersArray.length - 1];
-        
-        if (this.pipeReader) {
-          this.logger.info(`✅ PipeReader obtido - ${this.pipeReader.clients.size} clientes conectados`);
-        }
-      }
-
-      if (!success && this.isRunning) {
-        this.logger.warn('⚠️ Streamlink terminou sem sucesso, tentando restart...');
-        setTimeout(() => {
-          if (this.isRunning) {
-            this.restart();
-          }
-        }, 5000);
-      }
-
-    } catch (error) {
-      this.logger.error(`❌ Erro no streaming: ${error.message}`);
-      if (this.isRunning) {
-        setTimeout(() => this.restart(), 5000);
-      }
-    }
-  }
-
-  startHealthCheck() {
-    const interval = this.configManager.config.streaming?.autoRestart?.healthCheckInterval || 300;
-    
-    this.healthCheckInterval = setInterval(async () => {
-      await this.performHealthCheck();
-    }, interval * 1000);
-    
-    this.logger.debug(`💓 Health check iniciado (intervalo: ${interval}s)`);
-  }
-
-  async performHealthCheck() {
-    if (!this.isRunning) return;
-
-    try {
-      const uptime = Date.now() - this.startTime;
-      const maxUptime = this.configManager.config.streaming?.autoRestart?.tokenExpiryCheck || 1800;
-
-      // Verificar se token expirou (30 minutos padrão)
-      if (uptime > maxUptime * 1000) {
-        this.logger.info('⏱️ Token pode ter expirado, reiniciando sessão...');
-        await this.restart();
-        return;
-      }
-
-      // Verificar se pipe ainda existe
-      if (this.currentPipePath && !fs.existsSync(this.currentPipePath)) {
-        this.logger.warn('⚠️ Pipe não existe mais, recriando sessão...');
-        await this.restart();
-        return;
-      }
-
-      // Verificar se PipeReader está ativo
-      if (this.pipeReader && !this.pipeReader.isActive()) {
-        this.logger.warn('⚠️ PipeReader não está ativo, reiniciando...');
-        await this.restart();
-        return;
-      }
-
-      // Log de estatísticas periódicas
-      if (this.pipeReader) {
-        const stats = this.pipeReader.getStats();
-        this.logger.debug(`📊 Health: Uptime=${this.formatUptime(uptime)}, Clientes=${stats.clients}, Buffer=${this.formatBytes(stats.bufferSize)}`);
-      }
-
-    } catch (error) {
-      this.logger.error(`❌ Erro no health check: ${error.message}`);
-    }
-  }
-
-  getStatus() {
-    const status = {
-      sessionId: this.getSessionId(),
-      siteId: this.site.id,
-      siteName: this.site.name,
-      status: this.status,
-      startTime: this.startTime,
-      uptime: this.startTime ? Date.now() - this.startTime : 0,
-      restartCount: this.restartCount,
-      currentStream: this.currentStream,
-      isRunning: this.isRunning,
-      pipePath: this.currentPipePath,
-      pipeReader: null
-    };
-
-    // Adicionar stats do PipeReader se disponível
-    if (this.pipeReader) {
-      status.pipeReader = this.pipeReader.getStats();
-    }
-
-    return status;
   }
 
   getSessionId() {
@@ -358,13 +390,5 @@ export default class CaptureSession extends EventEmitter {
     } else {
       return `${seconds}s`;
     }
-  }
-
-  formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 }

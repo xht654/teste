@@ -1,6 +1,5 @@
 // src/sites/CaptureSession.js (CORREÇÃO DO BUG)
 import EventEmitter from 'events';
-import { execSync } from 'child_process';
 import fs from 'fs';
 import StreamDetector from '../core/StreamDetector.js';
 import StreamlinkManager from '../streaming/StreamlinkManager.js';
@@ -63,7 +62,6 @@ export default class CaptureSession extends EventEmitter {
       // 3. CRIAR PIPE
       this.currentPipePath = this.getPipePath();
       this.logger.info(`✅ Pipe criada: ${this.currentPipePath}`);
-      this.createPipe(this.currentPipePath);
 
       // 4. ✅ CORREÇÃO: USAR AWAIT para FFmpeg
       this.status = 'streaming';
@@ -359,20 +357,6 @@ export default class CaptureSession extends EventEmitter {
     return status;
   }
 
-createPipe(path) {
-  try {
-    const dir = path.split('/').slice(0, -1).join('/');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    if (fs.existsSync(path)) fs.unlinkSync(path);
-    execSync(`mkfifo "${path}"`);
-    fs.chmodSync(path, 0o666);
-    this.logger.info(`✅ Named pipe criada: ${path}`);
-  } catch (error) {
-    this.logger.error(`❌ Falha ao criar pipe: ${error.message}`);
-    throw error;
-  }
-}
-  
   selectBestStream(streams) {
     if (streams.combined.length > 0) {
       return {

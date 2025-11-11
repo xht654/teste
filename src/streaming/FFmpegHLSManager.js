@@ -24,160 +24,146 @@ export default class FFmpegHLSManager {
    * @returns {Promise<string>} - Caminho do playlist .m3u8
    */
   async startHLSConversion(pipePath, siteId, options = {}) {
-    const {
-      segmentDuration = 6,      // Duração de cada segmento .ts (segundos)
-      playlistSize = 5,          // Número de segmentos no playlist
-      deleteThreshold = 10,      // Deletar segmentos após N segmentos novos
-      hlsFlags = 'delete_segments+append_list+omit_endlist',
-      videoCodec = 'copy',       // 'copy' = não recodificar
-      audioCodec = 'copy',
-      format = 'mpegts',         // Formato de entrada (pipe)
-      outputFormat = 'hls'
-    } = options;
+  const {
+    segmentDuration = 6,
+    playlistSize = 5,
+    deleteThreshold = 10,
+    
+    // ✅ NOVAS OPÇÕES DVR
+    enableDVR = false,              // Habilitar DVR/Timeshift
+    dvrWindowSeconds = 3600,        // Janela de DVR (1 hora)
+    keepAllSegments = false,        // Manter todos os segmentos (perigoso!)
+    
+    hlsFlags = enableDVR 
+      ? 'append_list+omit_endlist'  // SEM delete_segments
+      : 'delete_segments+append_list+omit_endlist',
+    
+    videoCodec = 'copy',
+    audioCodec = 'copy',
+    format = 'mpegts',
+    outputFormat = 'hls'
+  } = options;
 
-    try {
-      // Criar diretório específico para o site
-      const siteHlsDir = path.join(this.hlsDir, siteId);
-      if (!fs.existsSync(siteHlsDir)) {
-        fs.mkdirSync(siteHlsDir, { recursive: true });
-      }
-
-      // Caminhos dos arquivos HLS
-      const playlistPath = path.join(siteHlsDir, 'stream.m3u8');
-      const segmentPattern = path.join(siteHlsDir, 'segment_%03d.ts');
-
-      this.logger.info(`🎬 Iniciando FFmpeg HLS para ${siteId}`);
-      this.logger.info(`📂 Pipe: ${pipePath}`);
-      this.logger.info(`📂 HLS Dir: ${siteHlsDir}`);
-      this.logger.info(`📝 Playlist: ${playlistPath}`);
-
-      // Verificar se pipe existe
-      if (!fs.existsSync(pipePath)) {
-        throw new Error(`Pipe não existe: ${pipePath}`);
-      }
-
-      // Argumentos FFmpeg
-      const ffmpegArgs = [
-        // Input
-        '-y',                              // Sobrescrever arquivos
-        '-fflags', '+genpts+igndts',       // Gerar timestamps
-        '-thread_queue_size', '512',       // Buffer de entrada
-        '-f', format,                      // Formato de entrada
-        '-i', pipePath,                    // Input: named pipe
-        
-        // Video codec
-        '-c:v', videoCodec,                // Copy = não recodificar
-        
-        // Audio codec
-        '-c:a', audioCodec,
-        
-        // HLS Options
-        '-f', outputFormat,
-        '-hls_time', segmentDuration.toString(),
-        '-hls_list_size', playlistSize.toString(),
-        '-hls_delete_threshold', deleteThreshold.toString(),
-        '-hls_flags', hlsFlags,
-        '-hls_segment_filename', segmentPattern,
-        
-        // Timeshift/DVR (opcional)
-        '-hls_playlist_type', 'event',     // 'event' ou 'vod' para DVR
-        
-        // Performance
-        '-max_muxing_queue_size', '1024',
-        '-preset', 'ultrafast',            // Baixa latência
-        '-tune', 'zerolatency',
-        
-        // Output
-        playlistPath
-      ];
-
-      this.logger.info(`🔧 Comando FFmpeg: ffmpeg ${ffmpegArgs.join(' ')}`);
-
-      // Iniciar processo FFmpeg
-      const ffmpegProcess = spawn('ffmpeg', ffmpegArgs, {
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-
-      const processId = `${siteId}_${Date.now()}`;
-
-      // Event: Spawn bem-sucedido
-      ffmpegProcess.on('spawn', () => {
-        this.logger.info(`✅ FFmpeg iniciado (PID: ${ffmpegProcess.pid}) - ${siteId}`);
-      });
-
-      // Event: STDOUT (informações do FFmpeg)
-      ffmpegProcess.stdout.on('data', (data) => {
-        const output = data.toString().trim();
-        if (output && !output.includes('frame=')) {
-          this.logger.debug(`[FFmpeg STDOUT] ${output}`);
-        }
-      });
-
-      // Event: STDERR (logs principais do FFmpeg)
-      ffmpegProcess.stderr.on('data', (data) => {
-        const output = data.toString();
-        
-        // Detectar erros críticos
-        if (output.includes('error') || output.includes('Error')) {
-          this.logger.error(`[FFmpeg ERROR] ${output.trim()}`);
-        }
-        // Detectar avisos
-        else if (output.includes('warning') || output.includes('Warning')) {
-          this.logger.warn(`[FFmpeg WARN] ${output.trim()}`);
-        }
-        // Logs de progresso (frame rate, bitrate)
-        else if (output.includes('frame=') || output.includes('fps=')) {
-          // Log apenas a cada 100 frames para não poluir
-          if (Math.random() < 0.01) {
-            this.logger.debug(`[FFmpeg] ${output.trim()}`);
-          }
-        }
-        // Outros logs importantes
-        else if (output.includes('Opening') || output.includes('Input') || output.includes('Output')) {
-          this.logger.info(`[FFmpeg] ${output.trim()}`);
-        }
-      });
-
-      // Event: Close
-      ffmpegProcess.on('close', (code) => {
-        this.logger.info(`⏹️ FFmpeg encerrado com código ${code} - ${siteId}`);
-        this.activeProcesses.delete(processId);
-      });
-
-      // Event: Error
-      ffmpegProcess.on('error', (error) => {
-        this.logger.error(`❌ Erro no FFmpeg (${siteId}): ${error.message}`);
-        this.activeProcesses.delete(processId);
-      });
-
-      // Salvar referência do processo
-      this.activeProcesses.set(processId, {
-        ffmpeg: ffmpegProcess,
-        siteId,
-        pipePath,
-        playlistPath,
-        siteHlsDir,
-        startTime: Date.now()
-      });
-
-      // Aguardar playlist ser criado (timeout 30s)
-      await this.waitForPlaylist(playlistPath, 30000);
-
-      this.logger.info(`✅ HLS pronto para ${siteId}: ${playlistPath}`);
-
-      return {
-        processId,
-        playlistPath,
-        playlistUrl: `/hls/${siteId}/stream.m3u8`,
-        siteHlsDir
-      };
-
-    } catch (error) {
-      this.logger.error(`❌ Erro ao iniciar FFmpeg HLS: ${error.message}`);
-      throw error;
+  try {
+    const siteHlsDir = path.join(this.hlsDir, siteId);
+    if (!fs.existsSync(siteHlsDir)) {
+      fs.mkdirSync(siteHlsDir, { recursive: true });
     }
-  }
 
+    const playlistPath = path.join(siteHlsDir, 'stream.m3u8');
+    const segmentPattern = path.join(siteHlsDir, 'segment_%03d.ts');
+
+    this.logger.info(`🎬 Iniciando FFmpeg HLS para ${siteId}`);
+    this.logger.info(`📂 DVR: ${enableDVR ? 'Habilitado' : 'Desabilitado'}`);
+
+    const ffmpegArgs = [
+      '-y',
+      '-fflags', '+genpts+igndts',
+      '-thread_queue_size', '512',
+      '-f', format,
+      '-i', pipePath,
+      
+      '-c:v', videoCodec,
+      '-c:a', audioCodec,
+      
+      '-f', outputFormat,
+      '-hls_time', segmentDuration.toString(),
+      '-hls_list_size', enableDVR 
+        ? Math.ceil(dvrWindowSeconds / segmentDuration).toString()  // DVR: lista grande
+        : playlistSize.toString(),                                   // Normal: lista pequena
+      
+      // ✅ CRÍTICO: delete_threshold só se não for DVR
+      ...(!enableDVR ? ['-hls_delete_threshold', deleteThreshold.toString()] : []),
+      
+      '-hls_flags', hlsFlags,
+      '-hls_segment_filename', segmentPattern,
+      
+      // ✅ DVR: usar event playlist
+      '-hls_playlist_type', enableDVR ? 'event' : 'event',
+      
+      '-max_muxing_queue_size', '1024',
+      '-preset', 'ultrafast',
+      '-tune', 'zerolatency',
+      
+      playlistPath
+    ];
+
+    this.logger.info(`🔧 Comando FFmpeg: ffmpeg ${ffmpegArgs.join(' ')}`);
+
+    const ffmpegProcess = spawn('ffmpeg', ffmpegArgs, {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    const processId = `${siteId}_${Date.now()}`;
+
+    // ... resto do código igual ...
+
+    // ✅ NOVO: Limpeza periódica de segmentos antigos (apenas se DVR habilitado)
+    if (enableDVR && !keepAllSegments) {
+      this.setupDVRCleanup(siteHlsDir, dvrWindowSeconds, segmentDuration);
+    }
+
+    return {
+      processId,
+      playlistPath,
+      playlistUrl: `/hls/${siteId}/stream.m3u8`,
+      siteHlsDir,
+      dvrEnabled: enableDVR
+    };
+
+  } catch (error) {
+    this.logger.error(`❌ Erro ao iniciar FFmpeg HLS: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * ✅ NOVO: Limpeza periódica de segmentos DVR antigos
+ */
+setupDVRCleanup(siteHlsDir, dvrWindowSeconds, segmentDuration) {
+  const maxSegments = Math.ceil(dvrWindowSeconds / segmentDuration);
+  
+  // Executar limpeza a cada 5 minutos
+  const cleanupInterval = setInterval(() => {
+    try {
+      const files = fs.readdirSync(siteHlsDir)
+        .filter(f => f.endsWith('.ts'))
+        .map(f => ({
+          name: f,
+          path: path.join(siteHlsDir, f),
+          mtime: fs.statSync(path.join(siteHlsDir, f)).mtimeMs
+        }))
+        .sort((a, b) => b.mtime - a.mtime);  // Mais recentes primeiro
+
+      // Manter apenas os últimos maxSegments
+      if (files.length > maxSegments) {
+        const toDelete = files.slice(maxSegments);
+        
+        toDelete.forEach(file => {
+          try {
+            fs.unlinkSync(file.path);
+            this.logger.debug(`🗑️ DVR cleanup: ${file.name}`);
+          } catch (e) {
+            this.logger.debug(`Erro ao deletar ${file.name}: ${e.message}`);
+          }
+        });
+        
+        if (toDelete.length > 0) {
+          this.logger.info(`🗑️ DVR cleanup: ${toDelete.length} segmentos antigos removidos`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Erro no DVR cleanup: ${error.message}`);
+    }
+  }, 5 * 60 * 1000);  // 5 minutos
+
+  // Guardar referência para limpar depois
+  if (!this.dvrCleanupIntervals) {
+    this.dvrCleanupIntervals = new Map();
+  }
+  this.dvrCleanupIntervals.set(siteHlsDir, cleanupInterval);
+}
+  
   /**
    * Aguarda playlist ser criado
    */

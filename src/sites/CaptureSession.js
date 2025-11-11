@@ -72,12 +72,15 @@ export default class CaptureSession extends EventEmitter {
       // 5. INICIAR STREAMLINK (agora FFmpeg já está consumindo a pipe)
       this.logger.info(`📡 Iniciando Streamlink...`);
       this.startStreamlink(); // ← Sem await (roda em background)
+      
+      // 5. Espera um curto intervalo antes do FFmpeg
+      await new Promise(res => setTimeout(res, 5000)); // 5 segundos
 
-
-            // 4. ✅ CORREÇÃO: USAR AWAIT para FFmpeg
+      // 4. ✅ CORREÇÃO: USAR AWAIT para FFmpeg
       this.status = 'streaming';
       this.logger.info(`🎬 Iniciando FFmpeg HLS...`);
-    // ✅ AGORA COM AWAIT - FFmpeg inicia e aguarda estar pronto
+      
+       // ✅ AGORA COM AWAIT - FFmpeg inicia e aguarda estar pronto
       await this.startFFmpegHLS();
       
       

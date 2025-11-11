@@ -30,8 +30,8 @@ RUN ffmpeg -version && echo "✅ FFmpeg instalado com sucesso"
 # ==========================================
 # CORREÇÃO: Criar usuário com UID/GID específicos
 # ==========================================
-RUN groupadd -g 2000 appuser && \
-    useradd -r -u 2000 -g appuser -s /bin/bash -m appuser
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser -s /bin/bash -m appuser
 
 WORKDIR /app
 

@@ -64,11 +64,6 @@ export default class CaptureSession extends EventEmitter {
       this.logger.info(`✅ Pipe criada: ${this.currentPipePath}`);
 
 
-      
-
-      
-      this.logger.info(`✅ FFmpeg pronto! HLS Info populado.`);
-
       // 5. INICIAR STREAMLINK (agora FFmpeg já está consumindo a pipe)
       this.logger.info(`📡 Iniciando Streamlink...`);
       this.startStreamlink(); // ← Sem await (roda em background)
@@ -82,15 +77,7 @@ export default class CaptureSession extends EventEmitter {
       
        // ✅ AGORA COM AWAIT - FFmpeg inicia e aguarda estar pronto
       await this.startFFmpegHLS();
-      
-      
-      //alterações minhas
-      //await Promise.race([
-      //this.startStreamlink(),
-      //new Promise(res => setTimeout(res, 3000)) // timeout de segurança
-      //]);
-      //await this.startFFmpegHLS();
-      //fim alterações minhas
+      this.logger.info(`✅ FFmpeg pronto! HLS Info populado.`);
       
       // 6. CRIAR CANAIS TVHEADEND
       await this.setupTVHeadendChannel();

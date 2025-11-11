@@ -171,6 +171,10 @@ export default class CaptureSession extends EventEmitter {
         videoCodec: 'copy',
         audioCodec: 'copy',
         hlsFlags: 'delete_segments+append_list+omit_endlist'
+        // ✅ ADICIONAR p/ DVR:
+        enableDVR: true,         // Habilita DVR
+        dvrWindowSeconds: 3600,  // 1 hora de retenção
+        keepAllSegments: false   // false = limpa antigos automaticamente
       };
 
       // ✅ AWAIT - Aguarda FFmpeg estar pronto e hlsInfo ser populado

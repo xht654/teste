@@ -30,9 +30,9 @@ RUN ffmpeg -version && echo "✅ FFmpeg instalado com sucesso"
 # ==========================================
 # CORREÇÃO: Criar usuário (verificando se já existe)
 # ==========================================
-RUN groupadd -f -g 1000 appuser || true && \
-    useradd -r -u 1000 -g 1000 -s /bin/bash -m appuser 2>/dev/null || \
-    (id appuser && echo "✅ User appuser já existe")
+# Use este Dockerfile alternativo (mais simples):
+# Substitua a linha de criação de user por:
+RUN id -u appuser &>/dev/null || useradd -m -u 1000 -s /bin/bash appuser
 
 WORKDIR /app
 

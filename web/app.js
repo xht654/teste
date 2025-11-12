@@ -10,6 +10,292 @@ let editingSiteId = null;
 let systemStats = {};
 let logsWebSocket = null;
 let logsAutoRefreshInterval = null;
+// ===================================
+// ADICIONAR ESTAS LINHAS NO INÍCIO DO app.js
+// Logo após: let systemStats = {};
+// ===================================
+
+// ===== WEBSOCKET VARIABLES =====
+let ws = null;
+let wsReconnectInterval = null;
+let wsReconnectAttempts = 0;
+const MAX_WS_RECONNECT_ATTEMPTS = 10;
+
+// ===== WEBSOCKET FUNCTIONS =====
+
+function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    
+    console.log('🔌 Conectando WebSocket:', wsUrl);
+    
+    try {
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = () => {
+            console.log('✅ WebSocket conectado');
+            wsReconnectAttempts = 0;
+            
+            if (wsReconnectInterval) {
+                clearInterval(wsReconnectInterval);
+                wsReconnectInterval = null;
+            }
+            
+            ws.send(JSON.stringify({ type: 'subscribe' }));
+            updateWebSocketStatus('connected');
+            showToast('WebSocket conectado', 'success', 2000);
+        };
+        
+        ws.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                handleWebSocketMessage(message);
+            } catch (error) {
+                console.error('Erro ao processar mensagem WebSocket:', error);
+            }
+        };
+        
+        ws.onerror = (error) => {
+            console.error('❌ WebSocket error:', error);
+            updateWebSocketStatus('error');
+        };
+        
+        ws.onclose = () => {
+            console.log('🔌 WebSocket desconectado');
+            updateWebSocketStatus('disconnected');
+            
+            if (wsReconnectAttempts < MAX_WS_RECONNECT_ATTEMPTS) {
+                wsReconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts), 30000);
+                
+                console.log(`🔄 Reconectando em ${delay/1000}s (tentativa ${wsReconnectAttempts})...`);
+                
+                setTimeout(() => {
+                    connectWebSocket();
+                }, delay);
+            } else {
+                console.error('❌ Máximo de tentativas de reconexão atingido');
+                showToast('WebSocket desconectado. Recarregue a página.', 'error', 0);
+            }
+        };
+        
+    } catch (error) {
+        console.error('Erro ao conectar WebSocket:', error);
+        updateWebSocketStatus('error');
+    }
+}
+
+function handleWebSocketMessage(message) {
+    console.log('📨 WebSocket:', message.type);
+    
+    switch (message.type) {
+        case 'initial_state':
+            currentSessions = message.sessions;
+            renderSessionsTable(message.sessions);
+            updateSessionsOverview(message.sessions);
+            break;
+            
+        case 'sessions_update':
+            currentSessions = message.sessions;
+            renderSessionsTable(message.sessions);
+            updateSessionsOverview(message.sessions);
+            break;
+            
+        case 'stream_found':
+            showToast(`✅ Stream encontrado: ${message.siteId}`, 'success', 3000);
+            refreshSessions();
+            break;
+            
+        case 'session_started':
+            showToast(`▶️ Sessão iniciada: ${message.siteId}`, 'info', 3000);
+            refreshSessions();
+            break;
+            
+        case 'session_ended':
+            showToast(`⏹️ Sessão parada`, 'warning', 3000);
+            refreshSessions();
+            break;
+            
+        case 'session_restarted':
+            console.log('🔄 Sessão reiniciada:', message);
+            showToast(
+                `🔄 ${message.siteId} reiniciado (tentativa ${message.restartCount})`, 
+                'warning', 
+                4000
+            );
+            refreshSessions();
+            break;
+            
+        case 'session_error':
+            showToast(`❌ Erro: ${message.siteId}`, 'error', 5000);
+            refreshSessions();
+            break;
+            
+        case 'status_update':
+            updateSessionStatusInline(message.siteId, message);
+            break;
+            
+        case 'pong':
+            break;
+            
+        default:
+            console.log('Mensagem WebSocket desconhecida:', message.type);
+    }
+}
+
+function updateWebSocketStatus(status) {
+    const indicator = document.getElementById('wsStatusIndicator');
+    if (!indicator) return;
+    
+    switch(status) {
+        case 'connected':
+            indicator.className = 'status-indicator status-active';
+            indicator.title = 'WebSocket conectado';
+            break;
+        case 'disconnected':
+            indicator.className = 'status-indicator status-inactive';
+            indicator.title = 'WebSocket desconectado';
+            break;
+        case 'error':
+            indicator.className = 'status-indicator status-warning';
+            indicator.title = 'Erro no WebSocket';
+            break;
+    }
+}
+
+function updateSessionStatusInline(siteId, data) {
+    const tbody = document.getElementById('sessionsTable');
+    if (!tbody) return;
+    
+    const row = tbody.querySelector(`tr[data-site-id="${siteId}"]`);
+    if (!row) return;
+    
+    const statusCell = row.querySelector('.session-status');
+    if (statusCell && data.status) {
+        statusCell.innerHTML = getSessionStatusBadge(data.status, data.isRunning);
+    }
+    
+    const uptimeCell = row.querySelector('.session-uptime');
+    if (uptimeCell && data.uptime !== undefined) {
+        uptimeCell.textContent = formatUptime(data.uptime);
+    }
+    
+    const restartsCell = row.querySelector('.session-restarts');
+    if (restartsCell && data.restartCount !== undefined) {
+        restartsCell.innerHTML = `<span class="badge ${data.restartCount > 0 ? 'bg-warning' : 'bg-success'}">${data.restartCount}</span>`;
+    }
+}
+
+// ===================================
+// MODIFICAR A FUNÇÃO renderSessionsTable EXISTENTE
+// Adicionar data-site-id nas <tr>
+// ===================================
+
+// SUBSTITUA a função renderSessionsTable existente por esta:
+function renderSessionsTable(sessions) {
+    const tbody = document.getElementById('sessionsTable');
+    if (!tbody) return;
+    
+    if (Object.keys(sessions).length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-center text-muted">
+                    <i class="fas fa-play-circle fa-2x mb-2"></i><br>
+                    Nenhuma sessão ativa. 
+                    <button class="btn btn-link p-0" onclick="startParallelCapture()">
+                        Iniciar captura paralela
+                    </button>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    const rows = Object.entries(sessions).map(([siteId, session]) => {
+        const statusBadge = getSessionStatusBadge(session.status, session.isRunning);
+        const streamType = session.currentStream?.type || 'N/A';
+        const uptime = formatUptime(session.uptime || 0);
+        const restarts = session.restartCount || 0;
+        
+        return `
+            <tr data-site-id="${siteId}">
+                <td>
+                    <strong>${session.siteName || siteId}</strong>
+                    <br><small class="text-muted">${siteId}</small>
+                </td>
+                <td class="session-status">${statusBadge}</td>
+                <td>
+                    <span class="badge bg-info">${streamType}</span>
+                </td>
+                <td class="text-monospace session-uptime">${uptime}</td>
+                <td class="session-restarts">
+                    <span class="badge ${restarts > 0 ? 'bg-warning' : 'bg-success'}">${restarts}</span>
+                </td>
+                <td>
+                    <div class="btn-group btn-group-sm" role="group">
+                        ${session.isRunning ? `
+                            <button class="btn btn-outline-warning" onclick="stopSession('${siteId}')" title="Parar">
+                                <i class="fas fa-stop"></i>
+                            </button>
+                            <button class="btn btn-outline-info" onclick="restartSession('${siteId}')" title="Reiniciar">
+                                <i class="fas fa-redo"></i>
+                            </button>
+                        ` : `
+                            <button class="btn btn-outline-success" onclick="startSession('${siteId}')" title="Iniciar">
+                                <i class="fas fa-play"></i>
+                            </button>
+                        `}
+                        <button class="btn btn-outline-primary" onclick="viewSessionDetails('${siteId}')" title="Detalhes">
+                            <i class="fas fa-info"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    
+    tbody.innerHTML = rows;
+}
+
+// ===================================
+// MODIFICAR DOMContentLoaded EXISTENTE
+// Adicionar connectWebSocket() e reduzir polling
+// ===================================
+
+// SUBSTITUA o DOMContentLoaded existente por:
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 Stream Capture Multi-Sessão v2.0 - Web UI iniciado');
+    
+    // ✅ CONECTAR WEBSOCKET PRIMEIRO
+    connectWebSocket();
+    
+    // Initial load
+    refreshAll();
+    
+    // Setup intervals (reduzir frequência - WebSocket cuida do resto)
+    setInterval(refreshSystemStatus, 30000); // 30s
+    // ❌ REMOVER: setInterval(refreshSessions, 10000);
+    setInterval(updateUptime, 1000);
+    
+    // Setup event listeners
+    setupEventListeners();
+    setupKeyboardShortcuts();
+});
+
+// ===================================
+// CLEANUP ao fechar página
+// ===================================
+window.addEventListener('beforeunload', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+    }
+    if (logsWebSocket) {
+        logsWebSocket.close();
+    }
+    if (logsAutoRefreshInterval) {
+        clearInterval(logsAutoRefreshInterval);
+    }
+});
 
 // ===== INICIALIZAÇÃO =====
 document.addEventListener('DOMContentLoaded', function() {

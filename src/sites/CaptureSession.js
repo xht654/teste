@@ -170,7 +170,7 @@ export default class CaptureSession extends EventEmitter {
         deleteThreshold: 10,
         videoCodec: 'copy',
         audioCodec: 'copy',
-        hlsFlags: 'delete_segments+append_list+omit_endlist'
+        hlsFlags: 'delete_segments+append_list+omit_endlist',
         // ✅ ADICIONAR p/ DVR:
         enableDVR: true,         // Habilita DVR
         dvrWindowSeconds: 3600,  // 1 hora de retenção

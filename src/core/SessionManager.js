@@ -1,3 +1,4 @@
+// src/core/SessionManager.js - COMPLETO COM EVENTOS WEBSOCKET
 import EventEmitter from 'events';
 import CaptureSession from '../sites/CaptureSession.js';
 import Logger from '../utils/Logger.js';
@@ -42,22 +43,74 @@ export default class SessionManager extends EventEmitter {
     const session = new CaptureSession(site, this.configManager);
     this.activeSessions.set(site.id, session);
 
-    // Event listeners
+    // ==========================================
+    // ✅ EVENT LISTENERS - REPASSAR PARA WEBSOCKET
+    // ==========================================
+    
+    // Stream encontrado
     session.on('streamFound', (streamData) => {
-      this.emit('streamFound', { siteId: site.id, streamData });
+      this.logger.info(`📡 Stream encontrado para ${site.id}`);
+      this.emit('streamFound', { 
+        siteId: site.id, 
+        streamData,
+        timestamp: Date.now()
+      });
     });
 
+    // Erro na sessão
     session.on('error', (error) => {
       this.logger.error(`Erro na sessão ${site.id}:`, error);
+      this.emit('sessionError', { 
+        siteId: site.id, 
+        error: error.message,
+        timestamp: Date.now()
+      });
+      // Não remover ainda - pode estar reiniciando
+    });
+
+    // Sessão encerrada
+    session.on('ended', () => {
+      this.logger.info(`Sessão ${site.id} encerrada`);
+      this.emit('sessionEnded', { 
+        siteId: site.id,
+        timestamp: Date.now()
+      });
       this.activeSessions.delete(site.id);
     });
 
-    session.on('ended', () => {
-      this.activeSessions.delete(site.id);
+    // ✅ NOVO: Sessão reiniciada
+    session.on('restarted', (data) => {
+      this.logger.info(`🔄 Sessão ${site.id} reiniciada (tentativa ${data.restartCount})`);
+      this.emit('sessionRestarted', {
+        siteId: site.id,
+        restartCount: data.restartCount,
+        timestamp: data.timestamp
+      });
+    });
+
+    // ✅ NOVO: Mudança de status
+    session.on('statusChanged', (data) => {
+      this.logger.debug(`Status ${site.id}: ${data.status}`);
+      this.emit('statusUpdate', { 
+        siteId: site.id, 
+        status: data.status,
+        isRunning: data.isRunning,
+        uptime: data.uptime,
+        restartCount: data.restartCount,
+        timestamp: Date.now()
+      });
     });
 
     try {
       await session.start();
+      
+      // Emitir evento de início
+      this.emit('sessionStarted', {
+        siteId: site.id,
+        siteName: site.name,
+        timestamp: Date.now()
+      });
+      
       return session;
     } catch (error) {
       this.activeSessions.delete(site.id);
@@ -72,6 +125,12 @@ export default class SessionManager extends EventEmitter {
       await session.stop();
       this.activeSessions.delete(siteId);
       this.logger.info(`Sessão ${siteId} parada`);
+      
+      // Emitir evento
+      this.emit('sessionEnded', { 
+        siteId,
+        timestamp: Date.now()
+      });
     }
   }
 
@@ -83,6 +142,17 @@ export default class SessionManager extends EventEmitter {
     await Promise.all(promises);
   }
 
+  // Reiniciar sessão específica
+  async restartSession(siteId) {
+    const session = this.activeSessions.get(siteId);
+    if (session) {
+      this.logger.info(`🔄 Reiniciando sessão ${siteId} manualmente`);
+      await session.restart();
+    } else {
+      throw new Error(`Sessão ${siteId} não encontrada`);
+    }
+  }
+
   // Obter status de todas as sessões
   getSessionsStatus() {
     const status = {};
@@ -90,6 +160,22 @@ export default class SessionManager extends EventEmitter {
       status[siteId] = session.getStatus();
     }
     return status;
+  }
+
+  // Obter status de uma sessão específica
+  getSessionStatus(siteId) {
+    const session = this.activeSessions.get(siteId);
+    return session ? session.getStatus() : null;
+  }
+
+  // Verificar se sessão está ativa
+  isSessionActive(siteId) {
+    return this.activeSessions.has(siteId);
+  }
+
+  // Obter número de sessões ativas
+  getActiveSessionsCount() {
+    return this.activeSessions.size;
   }
 
   processResults(results, sites) {

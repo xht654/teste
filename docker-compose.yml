@@ -1,3 +1,4 @@
+version: '3.8'
 
 services:
   tvheadend:
@@ -34,9 +35,8 @@ services:
     restart: unless-stopped
     
     # ==========================================
-    # CORREÇÃO: User com UID/GID do host
+    # SEM USER - roda como root para evitar problemas
     # ==========================================
-    user: "1000:1000"
     
     environment:
       - NODE_ENV=production
@@ -58,9 +58,9 @@ services:
       - ./hls:/app/hls
       - ./tvheadend/timeshift:/app/timeshift
       # ==========================================
-      # CRÍTICO: config.json com permissões de escrita
+      # CRÍTICO: config.json READ-WRITE
       # ==========================================
-      - ./config.json:/app/config.json:rw  # :rw = read-write
+      - ./config.json:/app/config.json
       - ./web:/app/web:ro
       - ./vpn:/app/vpn:ro
       - /dev/net/tun:/dev/net/tun

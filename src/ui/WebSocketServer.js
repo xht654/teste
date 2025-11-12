@@ -1,4 +1,4 @@
-/ src/ui/WebSocketServer.js - Sistema de Notificações em Tempo Real
+// src/ui/WebSocketServer.js - Sistema de Notificações em Tempo Real
 import { WebSocketServer } from 'ws';
 import Logger from '../utils/Logger.js';
 

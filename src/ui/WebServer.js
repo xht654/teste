@@ -1,7 +1,9 @@
+// src/ui/WebServer.js - COM WEBSOCKET
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import APIRoutes from './APIRoutes.js';
+import WSNotificationServer from './WebSocketServer.js';
 import Logger from '../utils/Logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -15,6 +17,7 @@ export default class WebServer {
     this.logger = new Logger('WebServer');
     this.app = express();
     this.server = null;
+    this.wsServer = null; // ✅ NOVO
     this.port = 3001;
   }
 
@@ -25,8 +28,12 @@ export default class WebServer {
     
     return new Promise((resolve, reject) => {
       this.server = this.app.listen(this.port, '0.0.0.0', () => {
-        this.logger.info(`Web UI ativo na porta ${this.port}`);
-        this.logger.info(`Acesso: http://localhost:${this.port}`);
+        this.logger.info(`🌐 Web UI ativo na porta ${this.port}`);
+        this.logger.info(`📍 Acesso: http://localhost:${this.port}`);
+        
+        // ✅ INICIAR WEBSOCKET
+        this.startWebSocket();
+        
         resolve();
       });
       
@@ -34,11 +41,29 @@ export default class WebServer {
     });
   }
 
+  // ✅ NOVO: Iniciar WebSocket Server
+  startWebSocket() {
+    try {
+      this.wsServer = new WSNotificationServer(this, this.sessionManager);
+      this.wsServer.start();
+      this.wsServer.startPeriodicUpdates(5000); // Atualizar a cada 5s
+      
+      this.logger.info('✅ WebSocket iniciado com sucesso');
+    } catch (error) {
+      this.logger.error('❌ Erro ao iniciar WebSocket:', error);
+    }
+  }
+
   async stop() {
+    // ✅ PARAR WEBSOCKET
+    if (this.wsServer) {
+      this.wsServer.stop();
+    }
+
     if (this.server) {
       return new Promise((resolve) => {
         this.server.close(() => {
-          this.logger.info('Web UI parado');
+          this.logger.info('⏹️ Web UI parado');
           resolve();
         });
       });

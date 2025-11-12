@@ -55,11 +55,11 @@ RUN mkdir -p \
     /app/vpn \
     /tmp/vpn \
     # NOVO: Tornar /app gravável para config.json
-    && chown -R appuser:appuser /app \
+    # && chown -R appuser:appuser /app \
     && chmod -R 755 /app \
     # Config.json precisa ser gravável
     && touch /app/config.json \
-    && chown appuser:appuser /app/config.json \
+    # && chown appuser:appuser /app/config.json \
     && chmod 664 /app/config.json
 
 # Variáveis de ambiente

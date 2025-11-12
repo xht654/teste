@@ -29,7 +29,8 @@
     "winston": "^3.11.0",
     "winston-daily-rotate-file": "^4.7.1",
     "joi": "^17.11.0",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
     "eslint": "^8.54.0",
@@ -42,9 +43,8 @@
   },
   "keywords": [
     "streaming", "capture", "tvheadend", "puppeteer", 
-    "vpn", "multi-session", "m3u8", "streamlink"
+    "vpn", "multi-session", "m3u8", "streamlink", "websocket"
   ],
   "author": "Stream Capture Team",
   "license": "MIT"
 }
-

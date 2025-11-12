@@ -28,10 +28,11 @@ RUN pip3 install --break-system-packages --no-cache-dir streamlink==6.5.1 \
 RUN ffmpeg -version && echo "✅ FFmpeg instalado com sucesso"
 
 # ==========================================
-# CORREÇÃO: Criar usuário com UID/GID específicos
+# CORREÇÃO: Criar usuário (verificando se já existe)
 # ==========================================
-RUN groupadd -g 1000 appuser && \
-    useradd -r -u 1000 -g appuser -s /bin/bash -m appuser
+RUN groupadd -f -g 1000 appuser || true && \
+    useradd -r -u 1000 -g 1000 -s /bin/bash -m appuser 2>/dev/null || \
+    (id appuser && echo "✅ User appuser já existe")
 
 WORKDIR /app
 

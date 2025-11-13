@@ -58,11 +58,16 @@ export default class FFmpegHLSManager {
 
     const ffmpegArgs = [
       '-y',
-      '-fflags', '+genpts+igndts',
+      //'-fflags', '+genpts+igndts',
       '-thread_queue_size', '512',
       '-f', format,
       '-i', pipePath,
-      
+      //adicionado por mim
+      '-fflags', '+genpts+igndts+nobuffer+flush_packets+discardcorrupt',
+      '-flags', 'low_delay',
+      '-avioflags', 'direct', 
+      '-re', 
+      //
       '-c:v', videoCodec,
       '-c:a', audioCodec,
       
@@ -77,13 +82,16 @@ export default class FFmpegHLSManager {
       
       '-hls_flags', hlsFlags,
       '-hls_segment_filename', segmentPattern,
-      
+      //adicionado por mim
+      '-hls_flags', '+delete_segments+append_list+omit_endlist+temp_file+program_date_time',
+      //
       // ✅ DVR: usar event playlist
       '-hls_playlist_type', enableDVR ? 'event' : 'event',
       
       '-max_muxing_queue_size', '1024',
       '-preset', 'ultrafast',
       '-tune', 'zerolatency',
+      
       
       playlistPath
     ];

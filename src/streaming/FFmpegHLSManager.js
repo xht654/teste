@@ -65,8 +65,8 @@ export default class FFmpegHLSManager {
       //adicionado por mim
       //'-fflags', '+genpts+igndts+nobuffer+discardcorrupt',
       '-flags', 'low_delay',
-      '-avioflags', 'direct', 
-      '-re', 
+      //'-avioflags', 'direct', 
+      //'-re', 
       //
       '-c:v', videoCodec,
       '-c:a', audioCodec,

@@ -63,7 +63,7 @@ export default class FFmpegHLSManager {
       '-f', format,
       '-i', pipePath,
       //adicionado por mim
-      '-fflags', '+genpts+igndts+nobuffer+flush_packets+discardcorrupt',
+      '-fflags', '+genpts+igndts+nobuffer+discardcorrupt',
       '-flags', 'low_delay',
       '-avioflags', 'direct', 
       '-re', 

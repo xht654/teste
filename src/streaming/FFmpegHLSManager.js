@@ -58,12 +58,12 @@ export default class FFmpegHLSManager {
 
     const ffmpegArgs = [
       '-y',
-      //'-fflags', '+genpts+igndts',
+      '-fflags', '+genpts+igndts',
       '-thread_queue_size', '512',
       '-f', format,
       '-i', pipePath,
       //adicionado por mim
-      '-fflags', '+genpts+igndts+nobuffer+discardcorrupt',
+      //'-fflags', '+genpts+igndts+nobuffer+discardcorrupt',
       '-flags', 'low_delay',
       '-avioflags', 'direct', 
       '-re', 
